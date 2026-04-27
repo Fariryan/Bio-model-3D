@@ -45,6 +45,9 @@
           <button class="ghost-button" id="autopilotButton" type="button">
             Auto tour
           </button>
+          <button class="ghost-button" id="resetViewButton" type="button">
+            Reset view
+          </button>
           <button class="accent-button" id="focusButton" type="button">
             Focus nucleus
           </button>
@@ -94,13 +97,30 @@
         <section class="viewer-stage">
           <div class="stage-overlay top">
             <div class="chip-row" id="modeChips"></div>
-            <div class="timeline-panel">
-              <div class="timeline-labels">
-                <span>Quiescent</span>
-                <span>Activated</span>
-                <span>Stress</span>
+            <div class="stage-side-panel">
+              <div class="timeline-panel">
+                <div class="timeline-labels">
+                  <span>Quiescent</span>
+                  <span>Activated</span>
+                  <span>Stress</span>
+                </div>
+                <input id="stateSlider" type="range" min="0" max="100" value="25" />
               </div>
-              <input id="stateSlider" type="range" min="0" max="100" value="25" />
+              <div class="control-dock">
+                <div class="dock-row buttons">
+                  <button class="ghost-button small icon-button" id="zoomOutButton" type="button">-</button>
+                  <button class="ghost-button small icon-button" id="zoomInButton" type="button">+</button>
+                  <button class="ghost-button small" id="xrayToggleButton" type="button">X-ray</button>
+                  <button class="ghost-button small" id="wireframeToggleButton" type="button">Wire</button>
+                </div>
+                <div class="dock-row">
+                  <label class="dock-slider">
+                    <span>Exploded view</span>
+                    <input id="explodeSlider" type="range" min="0" max="100" value="0" />
+                  </label>
+                </div>
+                <div class="dock-row toggles" id="componentToggleGroup"></div>
+              </div>
             </div>
           </div>
           <div id="sceneContainer" class="scene-container"></div>
@@ -120,6 +140,11 @@
               <section>
                 <h4>Biological synopsis</h4>
                 <p id="sampleSummary"></p>
+              </section>
+              <section>
+                <h4>Morphology realism</h4>
+                <p id="morphologySilhouette"></p>
+                <div id="morphologyNotes" class="detail-list compact"></div>
               </section>
               <section>
                 <h4>Organelle highlights</h4>

@@ -3,6 +3,7 @@ import { atlasGlossary } from "../data/glossary.js";
 import { atlasNarratives } from "../data/narratives.js";
 import { atlasResearchNotes } from "../data/researchNotes.js";
 import { atlasComparisons } from "../data/comparisons.js";
+import { getMorphologyProfile } from "../data/morphologyProfiles.js";
 import { CellScene } from "../scene/CellScene.js";
 import { formatNumber, formatPercent, sampleArray } from "../utils/format.js";
 
@@ -17,6 +18,15 @@ export class BioModelApp {
     this.comparisons = atlasComparisons;
     this.activeModel = cellCatalog[0];
     this.stateValue = 25;
+    this.componentState = {
+      membrane: true,
+      nucleus: true,
+      golgi: true,
+      reticulum: true,
+      mitochondria: true,
+      cytoskeleton: true,
+      vesicles: true,
+    };
   }
 
   mount() {
@@ -47,6 +57,8 @@ export class BioModelApp {
       sampleSummary: document.getElementById("sampleSummary"),
       organelleList: document.getElementById("organelleList"),
       markerList: document.getElementById("markerList"),
+      morphologySilhouette: document.getElementById("morphologySilhouette"),
+      morphologyNotes: document.getElementById("morphologyNotes"),
       narrativeTrack: document.getElementById("narrativeTrack"),
       glossaryCount: document.getElementById("glossaryCount"),
       glossaryList: document.getElementById("glossaryList"),
@@ -55,8 +67,15 @@ export class BioModelApp {
       comparisonCount: document.getElementById("comparisonCount"),
       comparisonList: document.getElementById("comparisonList"),
       stateSlider: document.getElementById("stateSlider"),
+      explodeSlider: document.getElementById("explodeSlider"),
       focusButton: document.getElementById("focusButton"),
       autopilotButton: document.getElementById("autopilotButton"),
+      resetViewButton: document.getElementById("resetViewButton"),
+      zoomInButton: document.getElementById("zoomInButton"),
+      zoomOutButton: document.getElementById("zoomOutButton"),
+      xrayToggleButton: document.getElementById("xrayToggleButton"),
+      wireframeToggleButton: document.getElementById("wireframeToggleButton"),
+      componentToggleGroup: document.getElementById("componentToggleGroup"),
       shuffleNarrativeButton: document.getElementById("shuffleNarrativeButton"),
     };
   }
@@ -75,8 +94,16 @@ export class BioModelApp {
       this.renderSummaryGrid();
     });
 
+    this.elements.explodeSlider.addEventListener("input", (event) => {
+      this.scene.setExplodeAmount(Number(event.target.value) / 100);
+    });
+
     this.elements.focusButton.addEventListener("click", () => {
       this.scene.focusOnNucleus();
+    });
+
+    this.elements.resetViewButton.addEventListener("click", () => {
+      this.scene.resetView();
     });
 
     this.elements.autopilotButton.addEventListener("click", () => {
@@ -86,9 +113,31 @@ export class BioModelApp {
         : "Auto tour";
     });
 
+    this.elements.zoomInButton.addEventListener("click", () => {
+      this.scene.zoom(0.9);
+    });
+
+    this.elements.zoomOutButton.addEventListener("click", () => {
+      this.scene.zoom(-0.9);
+    });
+
+    this.elements.xrayToggleButton.addEventListener("click", () => {
+      const enabled = !this.elements.xrayToggleButton.classList.contains("active");
+      this.elements.xrayToggleButton.classList.toggle("active", enabled);
+      this.scene.setXRay(enabled);
+    });
+
+    this.elements.wireframeToggleButton.addEventListener("click", () => {
+      const enabled = !this.elements.wireframeToggleButton.classList.contains("active");
+      this.elements.wireframeToggleButton.classList.toggle("active", enabled);
+      this.scene.setWireframe(enabled);
+    });
+
     this.elements.shuffleNarrativeButton.addEventListener("click", () => {
       this.renderNarratives();
     });
+
+    this.renderComponentToggles();
   }
 
   populateFilters() {
@@ -217,6 +266,10 @@ export class BioModelApp {
     this.activeModel = nextModel;
     this.scene.setModel(nextModel);
     this.scene.setStateTension(this.stateValue / 100);
+    this.scene.setExplodeAmount(Number(this.elements.explodeSlider.value) / 100);
+    Object.entries(this.componentState).forEach(([key, enabled]) => {
+      this.scene.toggleComponent(key, enabled);
+    });
     this.renderCatalog();
     this.renderInspector();
     this.renderLegends();
@@ -226,9 +279,19 @@ export class BioModelApp {
   }
 
   renderInspector() {
+    const profile = getMorphologyProfile(this.activeModel.id);
     this.elements.inspectorTitle.textContent = this.activeModel.name;
     this.elements.sampleBadge.textContent = `${this.activeModel.sampleType} sample`;
     this.elements.sampleSummary.textContent = this.activeModel.summaryLong;
+    this.elements.morphologySilhouette.textContent = profile.silhouette;
+
+    this.elements.morphologyNotes.innerHTML = "";
+    profile.realismNotes.forEach((note) => {
+      const row = document.createElement("article");
+      row.className = "detail-card";
+      row.innerHTML = `<p>${note}</p>`;
+      this.elements.morphologyNotes.appendChild(row);
+    });
 
     this.renderSummaryGrid();
 
@@ -365,6 +428,32 @@ export class BioModelApp {
       });
 
       this.elements.comparisonList.appendChild(card);
+    });
+  }
+
+  renderComponentToggles() {
+    const toggles = [
+      ["membrane", "Membrane"],
+      ["nucleus", "Nucleus"],
+      ["golgi", "Golgi"],
+      ["reticulum", "ER"],
+      ["mitochondria", "Mito"],
+      ["cytoskeleton", "Cytoskeleton"],
+      ["vesicles", "Vesicles"],
+    ];
+
+    this.elements.componentToggleGroup.innerHTML = "";
+    toggles.forEach(([key, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "toggle-chip active";
+      button.textContent = label;
+      button.addEventListener("click", () => {
+        this.componentState[key] = !this.componentState[key];
+        button.classList.toggle("active", this.componentState[key]);
+        this.scene.toggleComponent(key, this.componentState[key]);
+      });
+      this.elements.componentToggleGroup.appendChild(button);
     });
   }
 }
