@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>Bio-Model-3D</title>
+    <meta
+      name="description"
+      content="A cinematic 3D atlas for exploring human and animal cell models in the browser."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./src/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.177.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.177.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-icon">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div>
+            <p class="eyebrow">Living systems atlas</p>
+            <h1>Bio-Model-3D</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button class="ghost-button" id="autopilotButton" type="button">
+            Auto tour
+          </button>
+          <button class="accent-button" id="focusButton" type="button">
+            Focus nucleus
+          </button>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <section class="left-rail">
+          <div class="panel hero-panel">
+            <p class="eyebrow">Interactive collection</p>
+            <h2>Cell architectures across species, tissues, and biological states</h2>
+            <p class="hero-copy">
+              Explore stylized 3D models built from biological motifs, compare
+              human and animal samples, and inspect organelles, markers, and
+              disease-linked perturbations from a dense analytical interface.
+            </p>
+            <div class="hero-stats" id="heroStats"></div>
+          </div>
+
+          <div class="panel control-panel">
+            <div class="panel-heading">
+              <h3>Catalog</h3>
+              <span id="catalogCount"></span>
+            </div>
+            <label class="search-field">
+              <span>Search models</span>
+              <input id="searchInput" type="search" placeholder="Neuron, mouse, immune..." />
+            </label>
+            <div class="filters">
+              <label>
+                <span>Species</span>
+                <select id="speciesFilter"></select>
+              </label>
+              <label>
+                <span>Tissue</span>
+                <select id="tissueFilter"></select>
+              </label>
+              <label>
+                <span>Complexity</span>
+                <select id="complexityFilter"></select>
+              </label>
+            </div>
+            <div class="catalog-list" id="catalogList"></div>
+          </div>
+        </section>
+
+        <section class="viewer-stage">
+          <div class="stage-overlay top">
+            <div class="chip-row" id="modeChips"></div>
+            <div class="timeline-panel">
+              <div class="timeline-labels">
+                <span>Quiescent</span>
+                <span>Activated</span>
+                <span>Stress</span>
+              </div>
+              <input id="stateSlider" type="range" min="0" max="100" value="25" />
+            </div>
+          </div>
+          <div id="sceneContainer" class="scene-container"></div>
+          <div class="stage-overlay bottom">
+            <div class="legend-grid" id="legendGrid"></div>
+          </div>
+        </section>
+
+        <section class="right-rail">
+          <div class="panel inspector-panel">
+            <div class="panel-heading">
+              <h3 id="inspectorTitle">Model inspector</h3>
+              <span id="sampleBadge"></span>
+            </div>
+            <div class="summary-grid" id="summaryGrid"></div>
+            <div class="section-stack">
+              <section>
+                <h4>Biological synopsis</h4>
+                <p id="sampleSummary"></p>
+              </section>
+              <section>
+                <h4>Organelle highlights</h4>
+                <div id="organelleList" class="detail-list"></div>
+              </section>
+              <section>
+                <h4>Markers and pathways</h4>
+                <div id="markerList" class="detail-list"></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="panel narrative-panel">
+            <div class="panel-heading">
+              <h3>Guided narrative</h3>
+              <button type="button" class="ghost-button small" id="shuffleNarrativeButton">
+                Shuffle
+              </button>
+            </div>
+            <div id="narrativeTrack" class="narrative-track"></div>
+          </div>
+
+          <div class="panel glossary-panel">
+            <div class="panel-heading">
+              <h3>Atlas glossary</h3>
+              <span id="glossaryCount"></span>
+            </div>
+            <div id="glossaryList" class="glossary-list"></div>
+          </div>
+
+          <div class="panel notes-panel">
+            <div class="panel-heading">
+              <h3>Research cues</h3>
+              <span id="notesCount"></span>
+            </div>
+            <div id="notesList" class="notes-list"></div>
+          </div>
+
+          <div class="panel compare-panel">
+            <div class="panel-heading">
+              <h3>Comparison prompts</h3>
+              <span id="comparisonCount"></span>
+            </div>
+            <div id="comparisonList" class="comparison-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="catalogItemTemplate">
+      <button type="button" class="catalog-item">
+        <div class="catalog-item-top">
+          <span class="catalog-species"></span>
+          <span class="catalog-score"></span>
+        </div>
+        <h3 class="catalog-name"></h3>
+        <p class="catalog-description"></p>
+        <div class="catalog-tags"></div>
+      </button>
+    </template>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
