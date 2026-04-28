@@ -4,15 +4,36 @@ import { atlasNarratives } from "../data/narratives.js";
 import { atlasResearchNotes } from "../data/researchNotes.js";
 import { atlasComparisons } from "../data/comparisons.js";
 import { getMorphologyProfile } from "../data/morphologyProfiles.js";
-import { getNeuralMorphology } from "../data/neuronMorphologies.js";
 import { CellScene } from "../scene/CellScene.js";
 import { formatNumber, formatPercent, sampleArray } from "../utils/format.js";
 
+
+const COMPONENT_TOGGLE_META = [
+  ["membrane", "Membrane"],
+  ["nucleus", "Nucleus"],
+  ["golgi", "Golgi"],
+  ["reticulum", "ER"],
+  ["mitochondria", "Mito"],
+  ["cytoskeleton", "Cytoskeleton"],
+  ["vesicles", "Vesicles"],
+  ["lysosomes", "Lysosomes"],
+  ["ribosomes", "Ribosomes"],
+  ["processes", "Processes"],
+  ["projections", "Specialized structures"],
+  ["myelin", "Myelin"],
+  ["nodes", "Nodes"],
+  ["glia", "Glia"],
+  ["immune", "Microglia"],
+  ["signals", "Signals"],
+  ["damage", "Lesion"],
+];
+
+const DEFAULT_COMPONENT_STATE = Object.fromEntries(COMPONENT_TOGGLE_META.map(([key]) => [key, true]));
+
+
 export class BioModelApp {
   constructor({ container }) {
-    this.scene = new CellScene(container, {
-      onSelectionChange: (selection) => this.renderSelection(selection),
-    });
+    this.scene = new CellScene(container);
     this.models = cellCatalog;
     this.filteredModels = cellCatalog.slice();
     this.glossary = atlasGlossary;
@@ -21,21 +42,7 @@ export class BioModelApp {
     this.comparisons = atlasComparisons;
     this.activeModel = cellCatalog[0];
     this.stateValue = 25;
-    this.componentState = {
-      membrane: true,
-      nucleus: true,
-      golgi: true,
-      reticulum: true,
-      mitochondria: true,
-      cytoskeleton: true,
-      vesicles: true,
-      myelin: true,
-      nodes: true,
-      glia: true,
-      immune: true,
-      signals: true,
-      damage: true,
-    };
+    this.componentState = { ...DEFAULT_COMPONENT_STATE };
   }
 
   mount() {
@@ -73,11 +80,6 @@ export class BioModelApp {
       markerList: document.getElementById("markerList"),
       morphologySilhouette: document.getElementById("morphologySilhouette"),
       morphologyNotes: document.getElementById("morphologyNotes"),
-      brainArchitectureSection: document.getElementById("brainArchitectureSection"),
-      brainMetaGrid: document.getElementById("brainMetaGrid"),
-      brainFactsList: document.getElementById("brainFactsList"),
-      brainSpeciesList: document.getElementById("brainSpeciesList"),
-      brainReferenceList: document.getElementById("brainReferenceList"),
       narrativeTrack: document.getElementById("narrativeTrack"),
       glossaryCount: document.getElementById("glossaryCount"),
       glossaryList: document.getElementById("glossaryList"),
@@ -95,11 +97,6 @@ export class BioModelApp {
       xrayToggleButton: document.getElementById("xrayToggleButton"),
       wireframeToggleButton: document.getElementById("wireframeToggleButton"),
       componentToggleGroup: document.getElementById("componentToggleGroup"),
-      selectionCard: document.getElementById("selectionCard"),
-      selectionCategory: document.getElementById("selectionCategory"),
-      selectionTitle: document.getElementById("selectionTitle"),
-      selectionDescription: document.getElementById("selectionDescription"),
-      selectionTags: document.getElementById("selectionTags"),
       shuffleNarrativeButton: document.getElementById("shuffleNarrativeButton"),
     };
   }
@@ -295,6 +292,7 @@ export class BioModelApp {
     this.scene.setModel(nextModel);
     this.scene.setStateTension(this.stateValue / 100);
     this.scene.setExplodeAmount(Number(this.elements.explodeSlider.value) / 100);
+    this.renderComponentToggles();
     Object.entries(this.componentState).forEach(([key, enabled]) => {
       this.scene.toggleComponent(key, enabled);
     });
@@ -309,7 +307,6 @@ export class BioModelApp {
 
   renderInspector() {
     const profile = getMorphologyProfile(this.activeModel.id);
-    const neuralMorphology = getNeuralMorphology(this.activeModel.id);
     this.elements.inspectorTitle.textContent = this.activeModel.name;
     this.elements.sampleBadge.textContent = `${this.activeModel.sampleType} sample`;
     this.elements.sampleSummary.textContent = this.activeModel.summaryLong;
@@ -322,8 +319,6 @@ export class BioModelApp {
       row.innerHTML = `<p>${note}</p>`;
       this.elements.morphologyNotes.appendChild(row);
     });
-
-    this.renderBrainArchitecture(neuralMorphology);
 
     this.renderSummaryGrid();
 
@@ -353,11 +348,16 @@ export class BioModelApp {
 
   renderComponentInfo(info) {
     if (!info) {
+      const availableComponents = this.scene
+        .getAvailableComponents()
+        .map((key) => COMPONENT_TOGGLE_META.find(([candidate]) => candidate === key)?.[1] || key);
       this.elements.componentInfoCard.classList.remove("active", "damage");
       this.elements.componentCategory.textContent = "Click-to-inspect";
       this.elements.componentTitle.textContent = "Select any 3D component";
       this.elements.componentDetail.textContent =
-        "Click the soma, dendrites, axon, myelin, node of Ranvier, oligodendrocyte, astrocyte, microglia, lesion cloud, or moving signal pulse to see specific information here.";
+        availableComponents.length > 0
+          ? `This ${this.activeModel.name} view currently shows: ${availableComponents.join(", ")}. Click a visible structure in the 3D scene to inspect it.`
+          : "Click a visible structure in the 3D scene to inspect it.";
       this.elements.componentMarkers.innerHTML = "";
       return;
     }
@@ -488,27 +488,16 @@ export class BioModelApp {
   }
 
   renderComponentToggles() {
-    const toggles = [
-      ["membrane", "Membrane"],
-      ["nucleus", "Nucleus"],
-      ["golgi", "Golgi"],
-      ["reticulum", "ER"],
-      ["mitochondria", "Mito"],
-      ["cytoskeleton", "Cytoskeleton"],
-      ["vesicles", "Vesicles"],
-      ["myelin", "Myelin"],
-      ["nodes", "Nodes"],
-      ["glia", "Glia"],
-      ["immune", "Microglia"],
-      ["signals", "Signals"],
-      ["damage", "Lesion"],
-    ];
+    const availableComponents = this.scene.getAvailableComponents();
 
     this.elements.componentToggleGroup.innerHTML = "";
-    toggles.forEach(([key, label]) => {
+    COMPONENT_TOGGLE_META.filter(([key]) => availableComponents.includes(key)).forEach(([key, label]) => {
+      if (!(key in this.componentState)) {
+        this.componentState[key] = true;
+      }
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "toggle-chip active";
+      button.className = `toggle-chip ${this.componentState[key] ? "active" : ""}`.trim();
       button.textContent = label;
       button.addEventListener("click", () => {
         this.componentState[key] = !this.componentState[key];
@@ -518,60 +507,5 @@ export class BioModelApp {
       this.elements.componentToggleGroup.appendChild(button);
     });
   }
-
-  renderBrainArchitecture(neuralMorphology) {
-    if (!neuralMorphology) {
-      this.elements.brainArchitectureSection.hidden = true;
-      return;
-    }
-
-    this.elements.brainArchitectureSection.hidden = false;
-    this.elements.brainMetaGrid.innerHTML = "";
-    [
-      ["Cell class", neuralMorphology.brainMeta.cellClass],
-      ["Region", neuralMorphology.brainMeta.regionContext],
-      ["Laminar context", neuralMorphology.brainMeta.laminarContext],
-    ].forEach(([label, value]) => {
-      const card = document.createElement("div");
-      card.className = "summary-card";
-      card.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
-      this.elements.brainMetaGrid.appendChild(card);
-    });
-
-    this.fillDetailList(this.elements.brainFactsList, neuralMorphology.brainMeta.compartmentFacts);
-    this.fillDetailList(
-      this.elements.brainSpeciesList,
-      neuralMorphology.brainMeta.speciesSpecificity.concat(neuralMorphology.brainMeta.realismTargets),
-    );
-    this.fillDetailList(this.elements.brainReferenceList, neuralMorphology.brainMeta.references);
-  }
-
-  fillDetailList(element, items) {
-    element.innerHTML = "";
-    items.forEach((item) => {
-      const row = document.createElement("article");
-      row.className = "detail-card";
-      row.innerHTML = `<p>${item}</p>`;
-      element.appendChild(row);
-    });
-  }
-
-  renderSelection(selection) {
-    const card = this.elements.selectionCard;
-    if (!selection) {
-      card.classList.add("hidden");
-      return;
-    }
-
-    this.elements.selectionCategory.textContent = selection.category;
-    this.elements.selectionTitle.textContent = selection.title;
-    this.elements.selectionDescription.textContent = selection.description;
-    this.elements.selectionTags.innerHTML = "";
-    (selection.tags || []).forEach((tag) => {
-      const chip = document.createElement("span");
-      chip.textContent = tag;
-      this.elements.selectionTags.appendChild(chip);
-    });
-    card.classList.remove("hidden");
-  }
 }
+

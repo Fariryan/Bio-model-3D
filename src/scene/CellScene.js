@@ -331,13 +331,13 @@ export class CellScene {
     const radius = clamp(Math.max(size.x, size.y, size.z) * 0.62, 0.28, 1.75);
     const halo = new THREE.Group();
     const material = new THREE.MeshBasicMaterial({
-      color: info.category === "damage" ? COLOR_MAP.inflammatory : COLOR_MAP.signal,
+      color: info.category === "damage" ? COLOR_MAP.inflammatory : "#8ee7ff",
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.55,
       depthWrite: false,
     });
-    const ringA = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.018, 8, 96), material);
-    const ringB = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.78, 0.012, 8, 96), material.clone());
+    const ringA = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.014, 8, 96), material);
+    const ringB = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.76, 0.009, 8, 96), material.clone());
     ringA.rotation.x = Math.PI / 2;
     ringB.rotation.y = Math.PI / 2;
     halo.add(ringA, ringB);
@@ -460,144 +460,197 @@ export class CellScene {
     };
   }
 
-  buildNeuronMorphology(model) {
+  buildNeuronMorphology(model, profile) {
     const membraneGroup = this.createGroup("membrane");
     const processGroup = this.createGroup("processes");
     const projectionGroup = this.createGroup("projections");
 
-    const somaGeometry = new THREE.IcosahedronGeometry(1.45, 18);
-    deformSphere(somaGeometry, 1.45, { scaleX: 3.6, scaleY: 2.8, scaleZ: 3.2, amplitude: 0.07 });
-    somaGeometry.scale(1.12, 0.94, 1.02);
+    const isPyramidal = model.id === "human-cortical-neuron" || model.id === "mouse-hippocampal-neuron";
+    const somaGeometry = new THREE.IcosahedronGeometry(1.18, 22);
+    deformSphere(somaGeometry, 1.18, { scaleX: 3.8, scaleY: 4.2, scaleZ: 3.4, amplitude: 0.045 });
+    somaGeometry.translate(0, -0.18, 0);
     const soma = new THREE.Mesh(
       somaGeometry,
       createMaterial(model.palette.membrane, {
         emissive: new THREE.Color(model.palette.membraneGlow),
-        transmission: 0.38,
-        thickness: 0.45,
+        transmission: 0.32,
+        thickness: 0.34,
+        opacity: 0.92,
       }),
     );
+    soma.scale.set(isPyramidal ? 0.84 : 0.92, isPyramidal ? 1.06 : 0.96, isPyramidal ? 0.84 : 0.94);
     membraneGroup.add(soma);
 
-    const dendriteCurves = [
+    const apicalDendrite = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0.95, 0),
+      new THREE.Vector3(0.12, 2.2, 0.08),
+      new THREE.Vector3(0.18, 3.8, 0.02),
+      new THREE.Vector3(0.28, 5.2, -0.08),
+      new THREE.Vector3(0.34, 6.4, -0.12),
+    ]);
+
+    const basalDendrites = [
       new THREE.CatmullRomCurve3([
-        new THREE.Vector3(-1.1, 0.5, 0.2),
-        new THREE.Vector3(-2.4, 1.4, 0.6),
-        new THREE.Vector3(-3.5, 2.1, 0.3),
-        new THREE.Vector3(-4.3, 2.8, -0.4),
+        new THREE.Vector3(-0.38, -0.42, 0.18),
+        new THREE.Vector3(-1.35, -0.7, 0.46),
+        new THREE.Vector3(-2.35, -1.12, 0.92),
+        new THREE.Vector3(-3.3, -1.58, 1.3),
       ]),
       new THREE.CatmullRomCurve3([
-        new THREE.Vector3(-0.7, -0.2, 0.8),
-        new THREE.Vector3(-1.9, -0.7, 1.5),
-        new THREE.Vector3(-3.1, -1.1, 1.9),
-        new THREE.Vector3(-4.0, -1.8, 2.2),
+        new THREE.Vector3(0.32, -0.38, 0.12),
+        new THREE.Vector3(1.28, -0.72, 0.44),
+        new THREE.Vector3(2.18, -1.18, 0.92),
+        new THREE.Vector3(3.05, -1.7, 1.42),
       ]),
       new THREE.CatmullRomCurve3([
-        new THREE.Vector3(0.3, 0.9, -0.6),
-        new THREE.Vector3(0.2, 2.0, -1.5),
-        new THREE.Vector3(-0.6, 2.9, -2.0),
-        new THREE.Vector3(-1.3, 3.8, -2.4),
+        new THREE.Vector3(-0.22, -0.54, -0.18),
+        new THREE.Vector3(-1.1, -0.92, -0.58),
+        new THREE.Vector3(-1.92, -1.38, -1.08),
+        new THREE.Vector3(-2.82, -1.92, -1.58),
+      ]),
+      new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0.2, -0.46, -0.12),
+        new THREE.Vector3(0.98, -0.88, -0.62),
+        new THREE.Vector3(1.82, -1.32, -1.18),
+        new THREE.Vector3(2.74, -1.82, -1.74),
       ]),
     ];
 
-    addCurveTubes(
-      processGroup,
-      dendriteCurves,
-      createMaterial(model.palette.membrane, {
-        emissive: new THREE.Color(model.palette.membraneGlow),
-        transmission: 0.22,
-        opacity: 0.9,
-      }),
-      0.12,
-      96,
-      12,
-    );
-
-    dendriteCurves.forEach((curve, index) => {
-      const branchPoints = curve.getPoints(6);
-      [3, 4].forEach((branchIndex) => {
-        const basePoint = branchPoints[branchIndex];
-        const branch = new THREE.CatmullRomCurve3([
+    const tuftBranches = [];
+    [0.36, 0.54, 0.72, 0.86].forEach((t, branchIndex) => {
+      const basePoint = apicalDendrite.getPoint(t);
+      const offset = branchIndex % 2 === 0 ? -1 : 1;
+      tuftBranches.push(
+        new THREE.CatmullRomCurve3([
           basePoint,
-          basePoint.clone().add(new THREE.Vector3(0.42 + index * 0.08, 0.34 - index * 0.13, 0.38 - index * 0.22)),
-          basePoint.clone().add(new THREE.Vector3(0.88 + index * 0.1, 0.66 - index * 0.14, 0.82 - index * 0.28)),
-        ]);
-        addCurveTubes(
-          projectionGroup,
-          [branch],
-          createMaterial(model.palette.membrane, {
-            emissive: new THREE.Color(model.palette.membraneGlow),
-            transmission: 0.18,
-            opacity: 0.82,
-          }),
-          0.045,
-          56,
-          10,
-        );
-      });
+          basePoint.clone().add(new THREE.Vector3(0.65 * offset, 0.54, 0.24 * (branchIndex - 1.5))),
+          basePoint.clone().add(new THREE.Vector3(1.32 * offset, 1.06, 0.56 * (branchIndex - 1.5))),
+        ]),
+      );
+    });
 
-      curve.getPoints(18).slice(4, 15).forEach((point, spineIndex) => {
+    const dendriteMaterial = createMaterial(model.palette.membrane, {
+      emissive: new THREE.Color(model.palette.membraneGlow),
+      transmission: 0.22,
+      opacity: 0.9,
+    });
+    addCurveTubes(processGroup, [apicalDendrite], dendriteMaterial, 0.14, 120, 14);
+    addCurveTubes(processGroup, basalDendrites, dendriteMaterial, 0.11, 88, 12);
+    addCurveTubes(projectionGroup, tuftBranches, createMaterial(model.palette.membrane, {
+      emissive: new THREE.Color(model.palette.membraneGlow),
+      transmission: 0.18,
+      opacity: 0.82,
+    }), 0.06, 72, 10);
+
+    const allDendrites = [apicalDendrite, ...basalDendrites, ...tuftBranches];
+    allDendrites.forEach((curve, curveIndex) => {
+      const start = curveIndex === 0 ? 4 : 2;
+      curve.getPoints(curveIndex === 0 ? 22 : 14).slice(start, -2).forEach((point, spineIndex) => {
         if (spineIndex % 2 !== 0) return;
         const spine = new THREE.Mesh(
-          new THREE.CapsuleGeometry(0.015, 0.09, 4, 8),
-          createMaterial(model.palette.membrane, {
-            emissive: new THREE.Color(model.palette.membraneGlow),
-            transmission: 0.12,
-            opacity: 0.72,
+          new THREE.CapsuleGeometry(0.012, curveIndex === 0 ? 0.08 : 0.06, 4, 8),
+          createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, {
+            emissive: new THREE.Color("#173b4f"),
+            transmission: 0.1,
+            opacity: 0.74,
           }),
         );
-        const normal = new THREE.Vector3(Math.sin(spineIndex), 0.55, Math.cos(spineIndex)).normalize();
-        spine.position.copy(point).add(normal.clone().multiplyScalar(0.11));
+        const theta = spineIndex * 1.47 + curveIndex * 0.9;
+        const normal = new THREE.Vector3(Math.cos(theta), 0.25 + (curveIndex === 0 ? 0.15 : 0), Math.sin(theta)).normalize();
+        spine.position.copy(point).add(normal.clone().multiplyScalar(curveIndex === 0 ? 0.12 : 0.09));
         orientAlongVector(spine, normal);
         projectionGroup.add(spine);
       });
     });
 
+    const hillock = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.12, 0.42, 10, 16),
+      createMaterial(model.palette.cytoskeleton || COLOR_MAP.cytoskeleton, {
+        emissive: new THREE.Color("#2a2f5e"),
+        transmission: 0.12,
+        opacity: 0.86,
+      }),
+    );
+    hillock.rotation.z = -Math.PI / 2.6;
+    hillock.position.set(0.34, -0.82, 0.02);
+    projectionGroup.add(hillock);
+
     const axonCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(1.15, -0.2, 0.1),
-      new THREE.Vector3(2.4, -0.3, 0.1),
-      new THREE.Vector3(4.8, 0.3, -0.3),
-      new THREE.Vector3(7.4, 0.8, -0.2),
-      new THREE.Vector3(10.0, 1.4, 0.4),
+      new THREE.Vector3(0.54, -0.95, 0.02),
+      new THREE.Vector3(1.38, -1.84, 0.08),
+      new THREE.Vector3(2.62, -2.64, -0.04),
+      new THREE.Vector3(4.2, -3.06, -0.18),
+      new THREE.Vector3(6.4, -3.4, 0.12),
+      new THREE.Vector3(8.5, -3.92, 0.34),
     ]);
     addCurveTubes(
       processGroup,
       [axonCurve],
       createMaterial(model.palette.membrane, {
         emissive: new THREE.Color(model.palette.membraneGlow),
-        transmission: 0.18,
+        transmission: 0.16,
+        opacity: 0.9,
       }),
-      0.07,
-      144,
-      12,
+      0.055,
+      168,
+      10,
     );
 
-    for (let index = 0; index < 7; index += 1) {
-      const t = 0.22 + index * 0.1;
-      const point = axonCurve.getPoint(Math.min(t, 0.95));
+    const collateralCurves = [0.36, 0.58, 0.76].map((t, index) => {
+      const basePoint = axonCurve.getPoint(t);
+      return new THREE.CatmullRomCurve3([
+        basePoint,
+        basePoint.clone().add(new THREE.Vector3(0.42, 0.34 + index * 0.08, index % 2 === 0 ? 0.46 : -0.46)),
+        basePoint.clone().add(new THREE.Vector3(0.84, 0.58 + index * 0.1, index % 2 === 0 ? 0.92 : -0.92)),
+      ]);
+    });
+    addCurveTubes(projectionGroup, collateralCurves, createMaterial(model.palette.membrane, {
+      emissive: new THREE.Color(model.palette.membraneGlow),
+      transmission: 0.12,
+      opacity: 0.78,
+    }), 0.03, 54, 8);
+
+    const terminalBranches = [];
+    const terminalBase = axonCurve.getPoint(0.98);
+    for (let index = 0; index < 6; index += 1) {
+      const angle = (index / 6) * Math.PI * 2;
+      terminalBranches.push(new THREE.CatmullRomCurve3([
+        terminalBase,
+        terminalBase.clone().add(new THREE.Vector3(0.38, Math.cos(angle) * 0.36, Math.sin(angle) * 0.36)),
+        terminalBase.clone().add(new THREE.Vector3(0.82, Math.cos(angle) * 0.58, Math.sin(angle) * 0.58)),
+      ]));
+    }
+    addCurveTubes(projectionGroup, terminalBranches, createMaterial(model.palette.membrane, {
+      emissive: new THREE.Color(model.palette.membraneGlow),
+      transmission: 0.1,
+      opacity: 0.76,
+    }), 0.028, 42, 7);
+
+    terminalBranches.forEach((curve, index) => {
       const bouton = new THREE.Mesh(
-        new THREE.SphereGeometry(0.16, 12, 12),
+        new THREE.SphereGeometry(0.11 + (index % 2) * 0.02, 12, 12),
         createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, {
-          emissive: new THREE.Color("#18414d"),
-          opacity: 0.88,
+          emissive: new THREE.Color("#133643"),
+          opacity: 0.84,
         }),
       );
-      bouton.position.copy(point).add(new THREE.Vector3(0, Math.sin(index) * 0.18, Math.cos(index) * 0.12));
+      bouton.position.copy(curve.getPoint(1));
       projectionGroup.add(bouton);
-      this.floaters.push({ mesh: bouton, axis: "y", speed: 0.35 + index * 0.05, range: 0.02 });
-    }
+      this.floaters.push({ mesh: bouton, axis: "y", speed: 0.24 + index * 0.04, range: 0.015 });
+    });
 
-    this.registerExplodable(membraneGroup, new THREE.Vector3(-1, 0.6, 0.2));
-    this.registerExplodable(processGroup, new THREE.Vector3(1, 0.1, 0.1));
-    this.registerExplodable(projectionGroup, new THREE.Vector3(-0.2, 1, 0.4));
+    this.registerExplodable(membraneGroup, new THREE.Vector3(-0.3, 0.9, 0.2));
+    this.registerExplodable(processGroup, new THREE.Vector3(0.8, -0.15, 0.1));
+    this.registerExplodable(projectionGroup, new THREE.Vector3(-0.1, 0.8, 0.35));
 
     return {
       membraneGroup,
       processGroup,
       projectionGroup,
-      somaCenter: new THREE.Vector3(-0.1, 0.1, 0),
-      somaRadius: 1.45,
-      outerRadius: 10.0,
-      processCurves: [...dendriteCurves, axonCurve],
+      somaCenter: new THREE.Vector3(0, 0, 0),
+      somaRadius: 1.2,
+      outerRadius: 8.8,
+      processCurves: [...allDendrites, axonCurve, ...collateralCurves, ...terminalBranches],
     };
   }
 
@@ -680,7 +733,7 @@ export class CellScene {
       "ms-impulse",
       "Animated action potential pulse",
       "signal",
-      "Moving yellow pulses show neural signaling. Pulses accelerate over intact myelin and visibly distort near damaged internodes to show impaired conduction.",
+      "Moving blue-white pulses show neural signaling. Pulses travel rapidly across intact myelin and visibly stall or wobble near damaged internodes to show impaired conduction.",
       ["animated conduction", "saltatory jump", "lesion delay"],
     );
     const plaqueInfo = this.createComponentInfo(
@@ -814,7 +867,7 @@ export class CellScene {
       transmission: 0.08,
     });
     damagedMyelinMaterial.userData.baseOpacity = 0.72;
-    const nodeMaterial = new THREE.MeshBasicMaterial({ color: model.palette.node || COLOR_MAP.node, transparent: true, opacity: 0.9 });
+    const nodeMaterial = new THREE.MeshBasicMaterial({ color: "#d6f6ff", transparent: true, opacity: 0.56 });
 
     const internodes = [
       { a: 0.16, b: 0.24, damaged: false },
@@ -884,9 +937,9 @@ export class CellScene {
       [internode.a, internode.b].forEach((t) => {
         const center = axonCurve.getPoint(t);
         const tangent = axonCurve.getTangent(t).normalize();
-        const node = new THREE.Mesh(new THREE.TorusGeometry(0.205, 0.012, 8, 42), nodeMaterial.clone());
+        const node = new THREE.Mesh(new THREE.CylinderGeometry(0.118, 0.118, 0.04, 18, 1, true), nodeMaterial.clone());
         node.position.copy(center);
-        node.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
+        node.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
         node.name = "node of Ranvier";
         nodeGroup.add(this.registerInteractive(node, nodeInfo));
         this.reactiveMeshes.push({ mesh: node, baseScale: node.scale.clone(), speed: 1.6, phase: t * 7, amplitude: 0.06 });
@@ -896,7 +949,7 @@ export class CellScene {
     for (let pulseIndex = 0; pulseIndex < 5; pulseIndex += 1) {
       const pulse = new THREE.Mesh(
         new THREE.SphereGeometry(0.075, 18, 18),
-        new THREE.MeshBasicMaterial({ color: model.palette.signal || COLOR_MAP.signal, transparent: true, opacity: 0.92 }),
+        new THREE.MeshBasicMaterial({ color: model.palette.signal || "#c7f6ff", transparent: true, opacity: 0.9 }),
       );
       pulse.name = "animated action potential";
       signalGroup.add(this.registerInteractive(pulse, impulseInfo));
@@ -1042,26 +1095,84 @@ export class CellScene {
   }
 
   buildGliaMorphology(model) {
-    const generic = this.buildGenericMorphology(model);
-    generic.membraneGroup.scale.set(1.04, 0.96, 1.04);
-    const material = createMaterial(model.palette.membrane, {
-      emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.28,
-      opacity: 0.9,
-    });
-    const branches = [];
-    for (let index = 0; index < 10; index += 1) {
-      const angle = (index / 10) * Math.PI * 2;
-      const curve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(Math.cos(angle) * 0.8, (Math.random() - 0.5) * 0.6, Math.sin(angle) * 0.8),
-        new THREE.Vector3(Math.cos(angle) * 1.7, (Math.random() - 0.5) * 1.2, Math.sin(angle) * 1.7),
-        new THREE.Vector3(Math.cos(angle) * 2.6, (Math.random() - 0.5) * 1.8, Math.sin(angle) * 2.6),
-      ]);
-      branches.push(curve);
+    const membraneGroup = this.createGroup("membrane");
+    const processGroup = this.createGroup("processes");
+    const projectionGroup = this.createGroup("projections");
+
+    const somaGeometry = new THREE.IcosahedronGeometry(1.08, 18);
+    deformSphere(somaGeometry, 1.08, { scaleX: 3.0, scaleY: 2.7, scaleZ: 3.0, amplitude: 0.05 });
+    const soma = new THREE.Mesh(
+      somaGeometry,
+      createMaterial(model.palette.membrane, {
+        emissive: new THREE.Color(model.palette.membraneGlow),
+        transmission: 0.3,
+        thickness: 0.3,
+        opacity: 0.9,
+      }),
+    );
+    membraneGroup.add(soma);
+
+    const primaryCurves = [];
+    const secondaryCurves = [];
+    for (let index = 0; index < 12; index += 1) {
+      const theta = (index / 12) * Math.PI * 2;
+      const y0 = (Math.sin(index * 1.7) * 0.35);
+      const start = new THREE.Vector3(Math.cos(theta) * 0.66, y0, Math.sin(theta) * 0.66);
+      const mid = new THREE.Vector3(Math.cos(theta) * 1.55, y0 * 0.8 + Math.cos(index) * 0.28, Math.sin(theta) * 1.55);
+      const end = new THREE.Vector3(Math.cos(theta) * 2.65, y0 * 1.2 + Math.sin(index * 0.9) * 0.5, Math.sin(theta) * 2.65);
+      const primary = new THREE.CatmullRomCurve3([start, mid, end]);
+      primaryCurves.push(primary);
+
+      const branchBase = primary.getPoint(0.62);
+      secondaryCurves.push(new THREE.CatmullRomCurve3([
+        branchBase,
+        branchBase.clone().add(new THREE.Vector3(Math.cos(theta + 0.6) * 0.45, 0.2 + Math.sin(index) * 0.16, Math.sin(theta + 0.6) * 0.45)),
+        branchBase.clone().add(new THREE.Vector3(Math.cos(theta + 0.95) * 0.92, 0.32 + Math.cos(index) * 0.22, Math.sin(theta + 0.95) * 0.92)),
+      ]));
+      secondaryCurves.push(new THREE.CatmullRomCurve3([
+        branchBase,
+        branchBase.clone().add(new THREE.Vector3(Math.cos(theta - 0.55) * 0.38, -0.14 + Math.cos(index) * 0.12, Math.sin(theta - 0.55) * 0.38)),
+        branchBase.clone().add(new THREE.Vector3(Math.cos(theta - 0.9) * 0.84, -0.26 + Math.sin(index) * 0.2, Math.sin(theta - 0.9) * 0.84)),
+      ]));
     }
-    addCurveTubes(generic.processGroup, branches, material, 0.07, 64, 10);
-    this.registerExplodable(generic.processGroup, new THREE.Vector3(0.4, 1, 0.3));
-    return generic;
+
+    addCurveTubes(processGroup, primaryCurves, createMaterial(model.palette.membrane, {
+      emissive: new THREE.Color(model.palette.membraneGlow),
+      transmission: 0.18,
+      opacity: 0.88,
+    }), 0.075, 70, 10);
+    addCurveTubes(projectionGroup, secondaryCurves, createMaterial(model.palette.vesicle || model.palette.membrane, {
+      emissive: new THREE.Color("#153445"),
+      transmission: 0.12,
+      opacity: 0.72,
+    }), 0.026, 44, 8);
+
+    secondaryCurves.forEach((curve, index) => {
+      const endFoot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06 + (index % 3) * 0.012, 10, 10),
+        createMaterial(model.palette.vesicle || model.palette.membrane, {
+          emissive: new THREE.Color("#173746"),
+          opacity: 0.66,
+        }),
+      );
+      endFoot.position.copy(curve.getPoint(1));
+      projectionGroup.add(endFoot);
+    });
+
+    this.registerExplodable(membraneGroup, new THREE.Vector3(0.1, 1, 0.2));
+    this.registerExplodable(processGroup, new THREE.Vector3(-0.4, 0.8, 0.3));
+    this.registerExplodable(projectionGroup, new THREE.Vector3(0.55, -0.2, 0.55));
+
+    return {
+      membraneGroup,
+      processGroup,
+      projectionGroup,
+      somaCenter: new THREE.Vector3(0, 0, 0),
+      somaRadius: 1.08,
+      outerRadius: 2.95,
+      processCurves: [...primaryCurves, ...secondaryCurves],
+      shell: soma,
+    };
   }
 
   buildHepatocyteMorphology(model) {
@@ -1101,7 +1212,7 @@ export class CellScene {
 
     for (let index = 0; index < 60; index += 1) {
       const spike = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.018, 0.09 + Math.random() * 0.08, 4, 8),
+        new THREE.CapsuleGeometry(0.012, 0.045 + Math.random() * 0.03, 4, 8),
         createMaterial(model.palette.vesicle, {
           emissive: new THREE.Color("#183948"),
           opacity: 0.78,
@@ -1827,6 +1938,20 @@ export class CellScene {
     if (this.componentGroups[name]) {
       this.componentGroups[name].visible = enabled;
     }
+  }
+
+  getAvailableComponents() {
+    return Object.entries(this.componentGroups)
+      .filter(([, group]) => {
+        if (!group) return false;
+        if (group.children.length > 0) return true;
+        let hasRenderable = false;
+        group.traverse((node) => {
+          if (node !== group && node.isMesh) hasRenderable = true;
+        });
+        return hasRenderable;
+      })
+      .map(([key]) => key);
   }
 
   applyRenderMode() {
