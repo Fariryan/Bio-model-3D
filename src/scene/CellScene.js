@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { clamp } from "../utils/format.js";
 import { getMorphologyProfile } from "../data/morphologyProfiles.js";
-import { getNeuralMorphology } from "../data/neuronMorphologies.js";
 
 const COLOR_MAP = {
   membrane: "#6de9ff",
@@ -189,7 +188,6 @@ export class CellScene {
 
     const builders = this.getFamilyBuilder(this.activeProfile.family);
     const morphology = builders.createOutline.call(this, model, this.activeProfile);
-    this.currentOuterRadius = morphology.outerRadius || model.geometry.radius;
     const organelles = builders.createOrganelles.call(this, model, this.activeProfile, morphology);
 
     this.componentGroups = {
@@ -252,151 +250,6 @@ export class CellScene {
     });
   }
 
-  toVector3(points) {
-    return new THREE.Vector3(points[0], points[1], points[2]);
-  }
-
-  buildBranchCurve(branch) {
-    return new THREE.CatmullRomCurve3(branch.points.map((coords) => this.toVector3(coords)));
-  }
-
-  createSpinesForBranch(group, branch, color) {
-    if (!branch.spineDensity || branch.spineDensity <= 0) {
-      return;
-    }
-    const step = Math.max(2, Math.round(8 / branch.spineDensity));
-    for (let index = 1; index < branch.points.length - 1; index += step) {
-      const current = this.toVector3(branch.points[index]);
-      const previous = this.toVector3(branch.points[index - 1]);
-      const next = this.toVector3(branch.points[Math.min(index + 1, branch.points.length - 1)]);
-      const tangent = next.clone().sub(previous).normalize();
-      const side = new THREE.Vector3(-tangent.z, tangent.x, tangent.y).normalize();
-      const spine = new THREE.Mesh(
-        new THREE.ConeGeometry(0.012, 0.075, 6),
-        new THREE.MeshBasicMaterial({
-          color,
-          transparent: true,
-          opacity: 0.82,
-        }),
-      );
-      spine.position.copy(current).add(side.multiplyScalar(0.06));
-      spine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
-      group.add(spine);
-    }
-  }
-
-  createBoutonsForBranch(group, branch, color) {
-    if (!branch.boutonSpacing || branch.boutonSpacing <= 0) {
-      return;
-    }
-    const step = Math.max(2, Math.round(5 / branch.boutonSpacing));
-    for (let index = 2; index < branch.points.length - 2; index += step) {
-      const current = this.toVector3(branch.points[index]);
-      const bouton = new THREE.Mesh(
-        new THREE.SphereGeometry(0.06 + branch.radius * 0.9, 10, 10),
-        createMaterial(color, {
-          emissive: new THREE.Color("#183f4d"),
-          opacity: 0.86,
-          transmission: 0.12,
-        }),
-      );
-      bouton.position.copy(current);
-      group.add(bouton);
-      this.floaters.push({ mesh: bouton, axis: "y", speed: 0.18 + index * 0.01, range: 0.01 });
-    }
-  }
-
-  buildAtlasNeuralMorphology(model, atlas, family) {
-    const membraneGroup = this.createGroup("membrane");
-    const processGroup = this.createGroup("processes");
-    const projectionGroup = this.createGroup("projections");
-    const somaGeometry = new THREE.SphereGeometry(1, 36, 36);
-    somaGeometry.scale(atlas.soma.radii[0], atlas.soma.radii[1], atlas.soma.radii[2]);
-    const soma = new THREE.Mesh(
-      somaGeometry,
-      createMaterial(model.palette.membrane, {
-        emissive: new THREE.Color(model.palette.membraneGlow),
-        transmission: 0.32,
-        thickness: 0.32,
-      }),
-    );
-    soma.position.copy(this.toVector3(atlas.soma.center));
-    soma.rotation.set(atlas.soma.orientation[0], atlas.soma.orientation[1], atlas.soma.orientation[2]);
-    membraneGroup.add(soma);
-
-    const branchMaterial = createMaterial(model.palette.membrane, {
-      emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.15,
-      opacity: 0.9,
-    });
-    const fineMaterial = createMaterial(model.palette.membrane, {
-      emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.08,
-      opacity: 0.82,
-    });
-
-    const neuralCurves = [];
-    atlas.branches.forEach((branch) => {
-      const curve = this.buildBranchCurve(branch);
-      neuralCurves.push({ curve, branch });
-      const radius = branch.radius;
-      const material =
-        branch.kind === "axon" || branch.kind === "axonCollateral" || branch.kind === "glialFine"
-          ? fineMaterial
-          : branchMaterial;
-      const targetGroup =
-        branch.kind === "axon" || branch.kind === "axonCollateral" || branch.kind === "endfoot"
-          ? projectionGroup
-          : processGroup;
-      addCurveTubes(
-        targetGroup,
-        [curve],
-        material,
-        radius,
-        Math.max(24, branch.points.length * 6),
-        branch.kind === "glialFine" ? 6 : 10,
-      );
-      this.createSpinesForBranch(targetGroup, branch, model.palette.ribosome || COLOR_MAP.ribosome);
-      this.createBoutonsForBranch(targetGroup, branch, model.palette.vesicle || COLOR_MAP.vesicle);
-      if (branch.kind === "endfoot") {
-        const tip = this.toVector3(branch.points[branch.points.length - 1]);
-        const pad = new THREE.Mesh(
-          new THREE.SphereGeometry(branch.radius * 1.8, 12, 12),
-          createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, {
-            emissive: new THREE.Color("#173848"),
-            opacity: 0.72,
-            transmission: 0.18,
-          }),
-        );
-        pad.position.copy(tip);
-        projectionGroup.add(pad);
-      }
-    });
-
-    this.registerExplodable(membraneGroup, new THREE.Vector3(-0.4, 0.6, 0.2));
-    this.registerExplodable(processGroup, new THREE.Vector3(0.6, 0.3, 0.1));
-    this.registerExplodable(projectionGroup, new THREE.Vector3(-0.1, 1, 0.5));
-
-    return {
-      membraneGroup,
-      processGroup,
-      projectionGroup,
-      somaCenter: this.toVector3(atlas.soma.center),
-      somaRadius: Math.max(...atlas.soma.radii),
-      outerRadius:
-        Math.max(
-          ...atlas.branches.flatMap((branch) =>
-            branch.points.map(([x, y, z]) => Math.sqrt(x * x + y * y + z * z)),
-          ),
-        ) + 0.5,
-      processCurves: neuralCurves.map((item) => item.curve),
-      neuralCurves,
-      shell: soma,
-      family,
-      brainMeta: atlas.brainMeta,
-    };
-  }
-
   buildGenericMorphology(model) {
     const membraneGroup = this.createGroup("membrane");
     const processGroup = this.createGroup("processes");
@@ -434,10 +287,6 @@ export class CellScene {
   }
 
   buildNeuronMorphology(model) {
-    const atlas = getNeuralMorphology(model.id);
-    if (atlas) {
-      return this.buildAtlasNeuralMorphology(model, atlas, "neuron");
-    }
     const membraneGroup = this.createGroup("membrane");
     const processGroup = this.createGroup("processes");
     const projectionGroup = this.createGroup("projections");
@@ -560,10 +409,6 @@ export class CellScene {
   }
 
   buildGliaMorphology(model) {
-    const atlas = getNeuralMorphology(model.id);
-    if (atlas) {
-      return this.buildAtlasNeuralMorphology(model, atlas, "glia");
-    }
     const generic = this.buildGenericMorphology(model);
     generic.membraneGroup.scale.set(1.04, 0.96, 1.04);
     const material = createMaterial(model.palette.membrane, {
@@ -1038,16 +883,7 @@ export class CellScene {
       addCurveTubes(reticulumGroup, [new THREE.CatmullRomCurve3(ring)], material, 0.03 + (profile.family === "hepatocyte" ? 0.01 : 0), 48, 10);
     }
 
-    if ((profile.family === "neuron" || profile.family === "glia") && morphology.neuralCurves) {
-      morphology.neuralCurves
-        .filter((item) => ["apical", "basal", "glialPrimary"].includes(item.branch.kind))
-        .slice(0, 4)
-        .forEach((item) => {
-        const samplePoints = item.curve.getPoints(12).slice(1, 9);
-        const branchCurve = new THREE.CatmullRomCurve3(samplePoints.map((point, index) => point.clone().add(new THREE.Vector3(0, Math.sin(index) * 0.06, 0))));
-        addCurveTubes(reticulumGroup, [branchCurve], material, 0.02, 52, 8);
-      });
-    } else if (profile.family === "neuron" && morphology.processCurves) {
+    if (profile.family === "neuron" && morphology.processCurves) {
       morphology.processCurves.slice(0, 2).forEach((curve) => {
         const samplePoints = curve.getPoints(12).slice(1, 9);
         const branchCurve = new THREE.CatmullRomCurve3(samplePoints.map((point, index) => point.clone().add(new THREE.Vector3(0, Math.sin(index) * 0.06, 0))));
@@ -1067,30 +903,7 @@ export class CellScene {
       roughness: 0.35,
     });
 
-    if ((profile.family === "neuron" || profile.family === "glia") && morphology.neuralCurves) {
-      morphology.neuralCurves
-        .filter((item) => ["apical", "basal", "axon", "glialPrimary", "glialSecondary"].includes(item.branch.kind))
-        .forEach((item, curveIndex) => {
-          const samples = item.curve.getPoints(10);
-          samples.slice(2, 8).forEach((point, pointIndex) => {
-            if ((pointIndex + curveIndex) % 2 !== 0) {
-              return;
-            }
-            const mesh = new THREE.Mesh(
-              new THREE.CapsuleGeometry(
-                item.branch.kind === "axon" ? 0.032 : 0.045,
-                item.branch.kind === "axon" ? 0.18 : 0.24 + Math.random() * 0.16,
-                8,
-                14,
-              ),
-              material,
-            );
-            mesh.position.copy(point);
-            mesh.rotation.set(Math.random() * 0.4, Math.random() * Math.PI, Math.random() * 0.4);
-            mitoGroup.add(mesh);
-          });
-        });
-    } else if (profile.family === "neuron" || profile.family === "melanocyte") {
+    if (profile.family === "neuron" || profile.family === "melanocyte") {
       const curves = morphology.processCurves || [];
       curves.forEach((curve, curveIndex) => {
         const samples = curve.getPoints(10);
@@ -1363,10 +1176,9 @@ export class CellScene {
   }
 
   resetView() {
-    const isExtended = this.activeProfile && ["neuron", "muscle", "melanocyte", "glia"].includes(this.activeProfile.family);
-    const extendedZ = Math.max(12.5, (this.currentOuterRadius || 8) * 1.35);
+    const isExtended = this.activeProfile && ["neuron", "muscle", "melanocyte"].includes(this.activeProfile.family);
     this.camera.position.copy(
-      isExtended ? new THREE.Vector3(0.8, 1.4, extendedZ) : this.defaultCamera.clone(),
+      isExtended ? new THREE.Vector3(0.8, 1.4, 12.5) : this.defaultCamera.clone(),
     );
     this.controls.target.set(0, 0, 0);
     this.controls.update();

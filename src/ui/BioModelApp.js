@@ -4,7 +4,6 @@ import { atlasNarratives } from "../data/narratives.js";
 import { atlasResearchNotes } from "../data/researchNotes.js";
 import { atlasComparisons } from "../data/comparisons.js";
 import { getMorphologyProfile } from "../data/morphologyProfiles.js";
-import { getNeuralMorphology } from "../data/neuronMorphologies.js";
 import { CellScene } from "../scene/CellScene.js";
 import { formatNumber, formatPercent, sampleArray } from "../utils/format.js";
 
@@ -60,11 +59,6 @@ export class BioModelApp {
       markerList: document.getElementById("markerList"),
       morphologySilhouette: document.getElementById("morphologySilhouette"),
       morphologyNotes: document.getElementById("morphologyNotes"),
-      brainArchitectureSection: document.getElementById("brainArchitectureSection"),
-      brainMetaGrid: document.getElementById("brainMetaGrid"),
-      brainFactsList: document.getElementById("brainFactsList"),
-      brainSpeciesList: document.getElementById("brainSpeciesList"),
-      brainReferenceList: document.getElementById("brainReferenceList"),
       narrativeTrack: document.getElementById("narrativeTrack"),
       glossaryCount: document.getElementById("glossaryCount"),
       glossaryList: document.getElementById("glossaryList"),
@@ -286,7 +280,6 @@ export class BioModelApp {
 
   renderInspector() {
     const profile = getMorphologyProfile(this.activeModel.id);
-    const neuralAtlas = getNeuralMorphology(this.activeModel.id);
     this.elements.inspectorTitle.textContent = this.activeModel.name;
     this.elements.sampleBadge.textContent = `${this.activeModel.sampleType} sample`;
     this.elements.sampleSummary.textContent = this.activeModel.summaryLong;
@@ -299,8 +292,6 @@ export class BioModelApp {
       row.innerHTML = `<p>${note}</p>`;
       this.elements.morphologyNotes.appendChild(row);
     });
-
-    this.renderBrainArchitecture(neuralAtlas);
 
     this.renderSummaryGrid();
 
@@ -437,54 +428,6 @@ export class BioModelApp {
       });
 
       this.elements.comparisonList.appendChild(card);
-    });
-  }
-
-  renderBrainArchitecture(neuralAtlas) {
-    if (!neuralAtlas) {
-      this.elements.brainArchitectureSection.hidden = true;
-      return;
-    }
-
-    this.elements.brainArchitectureSection.hidden = false;
-    this.elements.brainMetaGrid.innerHTML = "";
-    const metaCards = [
-      ["Cell class", neuralAtlas.brainMeta.cellClass],
-      ["Region", neuralAtlas.brainMeta.regionContext],
-      ["Laminar context", neuralAtlas.brainMeta.laminarContext],
-    ];
-
-    metaCards.forEach(([label, value]) => {
-      const card = document.createElement("div");
-      card.className = "summary-card";
-      card.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
-      this.elements.brainMetaGrid.appendChild(card);
-    });
-
-    this.elements.brainFactsList.innerHTML = "";
-    neuralAtlas.brainMeta.compartmentFacts.forEach((fact) => {
-      const row = document.createElement("article");
-      row.className = "detail-card";
-      row.innerHTML = `<p>${fact}</p>`;
-      this.elements.brainFactsList.appendChild(row);
-    });
-
-    this.elements.brainSpeciesList.innerHTML = "";
-    neuralAtlas.brainMeta.speciesSpecificity
-      .concat(neuralAtlas.brainMeta.realismTargets)
-      .forEach((fact) => {
-        const row = document.createElement("article");
-        row.className = "detail-card";
-        row.innerHTML = `<p>${fact}</p>`;
-        this.elements.brainSpeciesList.appendChild(row);
-      });
-
-    this.elements.brainReferenceList.innerHTML = "";
-    neuralAtlas.brainMeta.references.forEach((fact) => {
-      const row = document.createElement("article");
-      row.className = "detail-card";
-      row.innerHTML = `<p>${fact}</p>`;
-      this.elements.brainReferenceList.appendChild(row);
     });
   }
 
