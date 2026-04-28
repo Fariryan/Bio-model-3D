@@ -124,6 +124,14 @@
             </div>
           </div>
           <div id="sceneContainer" class="scene-container"></div>
+          <div class="selection-card hidden" id="selectionCard" aria-live="polite">
+            <div class="selection-head">
+              <span id="selectionCategory"></span>
+              <strong id="selectionTitle"></strong>
+            </div>
+            <p id="selectionDescription"></p>
+            <div class="selection-tags" id="selectionTags"></div>
+          </div>
           <div class="stage-overlay bottom">
             <div class="legend-grid" id="legendGrid"></div>
           </div>
@@ -145,6 +153,13 @@
                 <h4>Morphology realism</h4>
                 <p id="morphologySilhouette"></p>
                 <div id="morphologyNotes" class="detail-list compact"></div>
+              </section>
+              <section id="brainArchitectureSection" hidden>
+                <h4>Brain architecture</h4>
+                <div class="brain-meta-grid" id="brainMetaGrid"></div>
+                <div class="detail-list compact" id="brainFactsList"></div>
+                <div class="detail-list compact" id="brainSpeciesList"></div>
+                <div class="detail-list compact" id="brainReferenceList"></div>
               </section>
               <section>
                 <h4>Organelle highlights</h4>

@@ -4,12 +4,15 @@ import { atlasNarratives } from "../data/narratives.js";
 import { atlasResearchNotes } from "../data/researchNotes.js";
 import { atlasComparisons } from "../data/comparisons.js";
 import { getMorphologyProfile } from "../data/morphologyProfiles.js";
+import { getNeuralMorphology } from "../data/neuronMorphologies.js";
 import { CellScene } from "../scene/CellScene.js";
 import { formatNumber, formatPercent, sampleArray } from "../utils/format.js";
 
 export class BioModelApp {
   constructor({ container }) {
-    this.scene = new CellScene(container);
+    this.scene = new CellScene(container, {
+      onSelectionChange: (selection) => this.renderSelection(selection),
+    });
     this.models = cellCatalog;
     this.filteredModels = cellCatalog.slice();
     this.glossary = atlasGlossary;
@@ -59,6 +62,11 @@ export class BioModelApp {
       markerList: document.getElementById("markerList"),
       morphologySilhouette: document.getElementById("morphologySilhouette"),
       morphologyNotes: document.getElementById("morphologyNotes"),
+      brainArchitectureSection: document.getElementById("brainArchitectureSection"),
+      brainMetaGrid: document.getElementById("brainMetaGrid"),
+      brainFactsList: document.getElementById("brainFactsList"),
+      brainSpeciesList: document.getElementById("brainSpeciesList"),
+      brainReferenceList: document.getElementById("brainReferenceList"),
       narrativeTrack: document.getElementById("narrativeTrack"),
       glossaryCount: document.getElementById("glossaryCount"),
       glossaryList: document.getElementById("glossaryList"),
@@ -76,6 +84,11 @@ export class BioModelApp {
       xrayToggleButton: document.getElementById("xrayToggleButton"),
       wireframeToggleButton: document.getElementById("wireframeToggleButton"),
       componentToggleGroup: document.getElementById("componentToggleGroup"),
+      selectionCard: document.getElementById("selectionCard"),
+      selectionCategory: document.getElementById("selectionCategory"),
+      selectionTitle: document.getElementById("selectionTitle"),
+      selectionDescription: document.getElementById("selectionDescription"),
+      selectionTags: document.getElementById("selectionTags"),
       shuffleNarrativeButton: document.getElementById("shuffleNarrativeButton"),
     };
   }
@@ -280,6 +293,7 @@ export class BioModelApp {
 
   renderInspector() {
     const profile = getMorphologyProfile(this.activeModel.id);
+    const neuralMorphology = getNeuralMorphology(this.activeModel.id);
     this.elements.inspectorTitle.textContent = this.activeModel.name;
     this.elements.sampleBadge.textContent = `${this.activeModel.sampleType} sample`;
     this.elements.sampleSummary.textContent = this.activeModel.summaryLong;
@@ -292,6 +306,8 @@ export class BioModelApp {
       row.innerHTML = `<p>${note}</p>`;
       this.elements.morphologyNotes.appendChild(row);
     });
+
+    this.renderBrainArchitecture(neuralMorphology);
 
     this.renderSummaryGrid();
 
@@ -455,5 +471,61 @@ export class BioModelApp {
       });
       this.elements.componentToggleGroup.appendChild(button);
     });
+  }
+
+  renderBrainArchitecture(neuralMorphology) {
+    if (!neuralMorphology) {
+      this.elements.brainArchitectureSection.hidden = true;
+      return;
+    }
+
+    this.elements.brainArchitectureSection.hidden = false;
+    this.elements.brainMetaGrid.innerHTML = "";
+    [
+      ["Cell class", neuralMorphology.brainMeta.cellClass],
+      ["Region", neuralMorphology.brainMeta.regionContext],
+      ["Laminar context", neuralMorphology.brainMeta.laminarContext],
+    ].forEach(([label, value]) => {
+      const card = document.createElement("div");
+      card.className = "summary-card";
+      card.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+      this.elements.brainMetaGrid.appendChild(card);
+    });
+
+    this.fillDetailList(this.elements.brainFactsList, neuralMorphology.brainMeta.compartmentFacts);
+    this.fillDetailList(
+      this.elements.brainSpeciesList,
+      neuralMorphology.brainMeta.speciesSpecificity.concat(neuralMorphology.brainMeta.realismTargets),
+    );
+    this.fillDetailList(this.elements.brainReferenceList, neuralMorphology.brainMeta.references);
+  }
+
+  fillDetailList(element, items) {
+    element.innerHTML = "";
+    items.forEach((item) => {
+      const row = document.createElement("article");
+      row.className = "detail-card";
+      row.innerHTML = `<p>${item}</p>`;
+      element.appendChild(row);
+    });
+  }
+
+  renderSelection(selection) {
+    const card = this.elements.selectionCard;
+    if (!selection) {
+      card.classList.add("hidden");
+      return;
+    }
+
+    this.elements.selectionCategory.textContent = selection.category;
+    this.elements.selectionTitle.textContent = selection.title;
+    this.elements.selectionDescription.textContent = selection.description;
+    this.elements.selectionTags.innerHTML = "";
+    (selection.tags || []).forEach((tag) => {
+      const chip = document.createElement("span");
+      chip.textContent = tag;
+      this.elements.selectionTags.appendChild(chip);
+    });
+    card.classList.remove("hidden");
   }
 }
