@@ -2160,3 +2160,56 @@ export const atlasResearchNotes = [
     "severity": "Elevated"
   }
 ];
+
+
+atlasResearchNotes.unshift(
+  {
+    id: "ms-note-001",
+    modelId: "human-ms-degenerated-myelin-neuron",
+    title: "Demyelination visibility",
+    detail: "The orange broken sheaths and debris clouds explicitly separate compact myelin from degenerated myelin, making the disease mechanism visually inspectable.",
+    tags: ["multiple sclerosis", "myelin", "demyelination"],
+    severity: "Elevated"
+  },
+  {
+    id: "ms-note-002",
+    modelId: "human-ms-degenerated-myelin-neuron",
+    title: "Conduction impairment animation",
+    detail: "Moving yellow pulses slow and distort near damaged internodes so the viewer can connect structural myelin loss to impaired neural signaling.",
+    tags: ["action potential", "axon", "conduction"],
+    severity: "Elevated"
+  },
+  {
+    id: "ms-note-003",
+    modelId: "human-ms-degenerated-myelin-neuron",
+    title: "Glial context",
+    detail: "The model includes oligodendrocyte support arms, a reactive astrocyte, and activated microglia to represent a CNS lesion microenvironment rather than an isolated axon.",
+    tags: ["oligodendrocyte", "astrocyte", "microglia"],
+    severity: "Moderate"
+  },
+  {
+    id: "ms-note-004",
+    modelId: "human-ms-degenerated-myelin-neuron",
+    title: "Click-to-inspect pedagogy",
+    detail: "Each visual structure carries a component-level information payload, allowing users to click soma, dendrites, axon, myelin, nodes, glia, lesion particles, or animated pulses.",
+    tags: ["interaction", "education", "3D atlas"],
+    severity: "Low"
+  },
+  {
+    id: "ms-note-005",
+    modelId: "human-ms-degenerated-myelin-neuron",
+    title: "Organelle containment correction",
+    detail: "Organelles are kept inside the neuronal soma and neurites, while extracellular elements are explicitly modeled as glia, myelin debris, or inflammatory plaque particles.",
+    tags: ["morphology", "organelles", "quality control"],
+    severity: "Moderate"
+  },
+  {
+    id: "ms-note-006",
+    modelId: "human-ms-degenerated-myelin-neuron",
+    title: "Disease model disclaimer",
+    detail: "The scene is an educational and conceptual visualization of MS-associated demyelination, not a patient-specific diagnostic reconstruction.",
+    tags: ["MS", "education", "model limits"],
+    severity: "Low"
+  }
+);
+

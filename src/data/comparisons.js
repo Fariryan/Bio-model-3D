@@ -1296,3 +1296,26 @@ export const atlasComparisons = [
     "metricDelta": "98 organelle units"
   }
 ];
+
+
+atlasComparisons.unshift(
+  {
+    id: "comparison-ms-001",
+    title: "MS neuron to cortical neuron contrast",
+    sourceId: "human-ms-degenerated-myelin-neuron",
+    targetId: "human-cortical-neuron",
+    focus: "Myelin integrity and conduction",
+    summary: "Compare the MS demyelination model against the baseline cortical projection neuron to inspect how myelin wrapping, glial response, inflammatory debris, and signal propagation differ.",
+    metricDelta: "Lesion-aware model"
+  },
+  {
+    id: "comparison-ms-002",
+    title: "MS neuron to astrocyte contrast",
+    sourceId: "human-ms-degenerated-myelin-neuron",
+    targetId: "rat-astrocyte",
+    focus: "Glial response context",
+    summary: "Compare the MS model with the astrocyte support cell to focus on how reactive glial morphology contributes to a local CNS lesion environment.",
+    metricDelta: "Glia enriched"
+  }
+);
+

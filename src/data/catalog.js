@@ -2137,6 +2137,194 @@ export const cellCatalog = [
   }
 ];
 
+
+cellCatalog.unshift({
+  id: "human-ms-degenerated-myelin-neuron",
+  name: "Multiple Sclerosis Neuron with Degenerated Myelin",
+  species: "Human",
+  tissue: "CNS white matter",
+  sampleType: "Interactive disease model",
+  complexity: "High",
+  score: 100,
+  summary: "Clickable neuron, oligodendrocyte, glia, myelin injury, and animated action-potential scene.",
+  summaryLong: "This specialized scene models a CNS neuron with a realistic soma, branching dendrites, a long axon, compact myelin internodes, nodes of Ranvier, degenerated myelin fragments, an inflammatory lesion field, oligodendrocyte support arms, reactive astrocyte morphology, activated microglia, organelles contained inside the soma, and animated signal pulses that visibly slow and distort near demyelinated regions.",
+  tags: [
+    "neuron",
+    "multiple sclerosis",
+    "myelin",
+    "demyelination",
+    "oligodendrocyte",
+    "microglia",
+    "astrocyte",
+    "axon",
+    "animated"
+  ],
+  palette: {
+    membrane: "#66e8ff",
+    membraneGlow: "#0a3144",
+    nucleus: "#f1b6ff",
+    mitochondria: "#ff8d68",
+    golgi: "#ffd675",
+    reticulum: "#65efbd",
+    lysosome: "#ff6e9e",
+    vesicle: "#86e9ff",
+    cytoskeleton: "#8296ff",
+    ribosome: "#f7fbff",
+    myelin: "#eaf6ff",
+    damagedMyelin: "#ffad6b",
+    exposedAxon: "#ffba76",
+    node: "#fff36d",
+    signal: "#fff36d"
+  },
+  geometry: {
+    radius: 2.45,
+    nucleusRadius: 0.88,
+    wrinkleScale: 3.4,
+    wrinkleAmp: 0.055
+  },
+  components: {
+    mitochondria: 30,
+    reticulum: 12,
+    vesicles: 26,
+    lysosomes: 10,
+    ribosomes: 420,
+    filaments: 34
+  },
+  metrics: {
+    organelles: 560,
+    permeability: 68,
+    stressBase: 7.9,
+    atpReserve: 73,
+    cytoskeletalBias: "Axon and lesion"
+  },
+  organelleHighlights: [
+    {
+      name: "Neuron body and dendritic arbor",
+      detail: "The scene uses a true neural silhouette with an irregular soma, multiple tapering dendrites, secondary branchlets, and spine-like protrusions rather than a generic spherical cell."
+    },
+    {
+      name: "Long axon with exposed regions",
+      detail: "The axon is rendered as a continuous neural cable with visible exposed orange membrane where damaged myelin is missing or fragmented."
+    },
+    {
+      name: "Compact and degenerated myelin",
+      detail: "Healthy internodes are shown as smooth insulating tubes, while lesion internodes are broken into displaced fragments and debris around the shaft."
+    },
+    {
+      name: "Nodes of Ranvier",
+      detail: "Bright ring-like nodes mark the gaps between myelin internodes and can be clicked to explain saltatory conduction."
+    },
+    {
+      name: "Oligodendrocyte support",
+      detail: "A nearby oligodendrocyte extends wrapping arms toward multiple internodes, connecting the disease scene to CNS myelin biology."
+    },
+    {
+      name: "Microglia and astrocyte response",
+      detail: "Activated microglia and a reactive astrocyte are included so the model is not only an axon, but a local neuroinflammatory microenvironment."
+    },
+    {
+      name: "Animated signal propagation",
+      detail: "Yellow pulses move along the axon and visibly distort near the degenerated myelin zone to communicate conduction delay."
+    },
+    {
+      name: "Contained organelles",
+      detail: "Nucleus, Golgi, reticulum, mitochondria, vesicles, lysosomes, cytoskeleton, and ribosomes remain positioned inside the soma or neurites, avoiding organelles floating outside the cell."
+    }
+  ],
+  markers: [
+    {
+      marker: "MBP",
+      significance: "Myelin basic protein reference for compact CNS myelin and myelin injury interpretation.",
+      pathway: "Myelin sheath structure",
+      signal: "Demyelination context"
+    },
+    {
+      marker: "PLP1",
+      significance: "Major CNS myelin protein linked to oligodendrocyte-derived myelin integrity.",
+      pathway: "Oligodendrocyte myelination",
+      signal: "Internode identity"
+    },
+    {
+      marker: "MOG",
+      significance: "Myelin-associated surface antigen used here as a disease-context cue for myelin-directed immune biology.",
+      pathway: "Myelin immune interface",
+      signal: "MS lesion cue"
+    },
+    {
+      marker: "IBA1/AIF1",
+      significance: "Microglial activation marker mapped to the green process-rich immune cell near debris.",
+      pathway: "Innate immune surveillance",
+      signal: "Activated microglia"
+    },
+    {
+      marker: "GFAP",
+      significance: "Astrocyte intermediate filament marker mapped to the blue stellate support cell.",
+      pathway: "Reactive astrocyte biology",
+      signal: "Glial response"
+    },
+    {
+      marker: "Nav channels",
+      significance: "Ion channel concentration cue mapped to nodes of Ranvier and exposed axonal membrane.",
+      pathway: "Action potential conduction",
+      signal: "Node physiology"
+    },
+    {
+      marker: "ATP5F1",
+      significance: "Mitochondrial ATP reserve cue for energy demand in the soma and along neurites.",
+      pathway: "Oxidative phosphorylation",
+      signal: "Axonal energy demand"
+    },
+    {
+      marker: "LC3B",
+      significance: "Autophagy and recycling cue associated with myelin debris processing and cellular stress.",
+      pathway: "Stress adaptation",
+      signal: "Debris handling"
+    }
+  ],
+  legend: [
+    {
+      label: "Neuron membrane",
+      detail: "Cyan soma, dendrites, and axon core with polarized neural geometry.",
+      color: "#66e8ff"
+    },
+    {
+      label: "Healthy myelin",
+      detail: "Pale compact internodes surrounding intact axonal sections.",
+      color: "#eaf6ff"
+    },
+    {
+      label: "Degenerated myelin",
+      detail: "Orange fragments and broken wraps showing demyelinated lesion regions.",
+      color: "#ffad6b"
+    },
+    {
+      label: "Nodes of Ranvier",
+      detail: "Bright yellow rings between myelin internodes where impulses jump.",
+      color: "#fff36d"
+    },
+    {
+      label: "Signal pulse",
+      detail: "Animated yellow spheres moving along the axon.",
+      color: "#fff36d"
+    },
+    {
+      label: "Oligodendrocyte and astrocyte",
+      detail: "Blue-white glial cells supporting myelin and lesion boundary behavior.",
+      color: "#8fd6ff"
+    },
+    {
+      label: "Activated microglia",
+      detail: "Green process-rich cell surveying and clearing myelin debris.",
+      color: "#9df7a5"
+    },
+    {
+      label: "Inflammatory plaque",
+      detail: "Semi-transparent red cloud and particles around damaged internodes.",
+      color: "#ff6a82"
+    }
+  ]
+});
+
 export const heroStats = [
   {
     "label": "Species span",
@@ -2145,12 +2333,12 @@ export const heroStats = [
   },
   {
     "label": "Cell systems",
-    "value": "12 models",
+    "value": "13 models",
     "detail": "Immune, neural, developmental, epithelial, contractile, pigment"
   },
   {
     "label": "Atlas signals",
-    "value": "260+ cues",
+    "value": "280+ cues",
     "detail": "Markers, glossary nodes, narratives, and research-note fragments"
   }
 ];
@@ -2182,6 +2370,7 @@ export const derivedFilterValues = {
     "Zebrafish"
   ],
   "tissues": [
+    "CNS white matter",
     "Airway",
     "Cerebral cortex",
     "Embryonic axis",

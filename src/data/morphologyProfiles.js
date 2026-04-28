@@ -112,6 +112,19 @@ export const morphologyProfiles = {
   },
 };
 
+
+morphologyProfiles["human-ms-degenerated-myelin-neuron"] = {
+  family: "msNeuron",
+  silhouette: "Large neural soma with dendritic arbor, one long axon, compact myelin internodes, exposed demyelinated axon, myelin debris, and neighboring glial/immune support cells.",
+  realismNotes: [
+    "The model is no longer a generic cell: it uses neuronal polarity with a soma, dendrites, axon hillock, long axon, terminal boutons, and spine-like dendritic protrusions.",
+    "Myelin is represented as segmented internodes interrupted by nodes of Ranvier, with two damaged internodes showing broken wraps, exposed axon, and debris.",
+    "CNS support context is included through an oligodendrocyte, reactive astrocyte, activated microglia, inflammatory plaque particles, and animated conduction pulses.",
+    "Internal organelles are constrained to the soma and neurites so they do not float outside the cell boundary."
+  ],
+  morphologyTags: ["demyelinated axon", "nodes of Ranvier", "oligodendrocyte", "microglia", "action potential pulses", "MS lesion"]
+};
+
 export function getMorphologyProfile(modelId) {
   return morphologyProfiles[modelId] || {
     family: "generic",

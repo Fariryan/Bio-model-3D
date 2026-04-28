@@ -29,6 +29,12 @@ export class BioModelApp {
       mitochondria: true,
       cytoskeleton: true,
       vesicles: true,
+      myelin: true,
+      nodes: true,
+      glia: true,
+      immune: true,
+      signals: true,
+      damage: true,
     };
   }
 
@@ -57,6 +63,11 @@ export class BioModelApp {
       inspectorTitle: document.getElementById("inspectorTitle"),
       sampleBadge: document.getElementById("sampleBadge"),
       summaryGrid: document.getElementById("summaryGrid"),
+      componentInfoCard: document.getElementById("componentInfoCard"),
+      componentCategory: document.getElementById("componentCategory"),
+      componentTitle: document.getElementById("componentTitle"),
+      componentDetail: document.getElementById("componentDetail"),
+      componentMarkers: document.getElementById("componentMarkers"),
       sampleSummary: document.getElementById("sampleSummary"),
       organelleList: document.getElementById("organelleList"),
       markerList: document.getElementById("markerList"),
@@ -95,6 +106,10 @@ export class BioModelApp {
 
   bindEvents() {
     const refilter = () => this.applyFilters();
+
+    this.scene.setSelectionCallback((info) => {
+      this.renderComponentInfo(info);
+    });
 
     this.elements.searchInput.addEventListener("input", refilter);
     this.elements.speciesFilter.addEventListener("change", refilter);
@@ -283,6 +298,7 @@ export class BioModelApp {
     Object.entries(this.componentState).forEach(([key, enabled]) => {
       this.scene.toggleComponent(key, enabled);
     });
+    this.renderComponentInfo(null);
     this.renderCatalog();
     this.renderInspector();
     this.renderLegends();
@@ -332,6 +348,30 @@ export class BioModelApp {
         </div>
       `;
       this.elements.markerList.appendChild(row);
+    });
+  }
+
+  renderComponentInfo(info) {
+    if (!info) {
+      this.elements.componentInfoCard.classList.remove("active", "damage");
+      this.elements.componentCategory.textContent = "Click-to-inspect";
+      this.elements.componentTitle.textContent = "Select any 3D component";
+      this.elements.componentDetail.textContent =
+        "Click the soma, dendrites, axon, myelin, node of Ranvier, oligodendrocyte, astrocyte, microglia, lesion cloud, or moving signal pulse to see specific information here.";
+      this.elements.componentMarkers.innerHTML = "";
+      return;
+    }
+
+    this.elements.componentInfoCard.classList.add("active");
+    this.elements.componentInfoCard.classList.toggle("damage", info.category === "damage");
+    this.elements.componentCategory.textContent = info.category;
+    this.elements.componentTitle.textContent = info.title;
+    this.elements.componentDetail.textContent = info.detail;
+    this.elements.componentMarkers.innerHTML = "";
+    info.markers.forEach((marker) => {
+      const chip = document.createElement("span");
+      chip.textContent = marker;
+      this.elements.componentMarkers.appendChild(chip);
     });
   }
 
@@ -456,6 +496,12 @@ export class BioModelApp {
       ["mitochondria", "Mito"],
       ["cytoskeleton", "Cytoskeleton"],
       ["vesicles", "Vesicles"],
+      ["myelin", "Myelin"],
+      ["nodes", "Nodes"],
+      ["glia", "Glia"],
+      ["immune", "Microglia"],
+      ["signals", "Signals"],
+      ["damage", "Lesion"],
     ];
 
     this.elements.componentToggleGroup.innerHTML = "";

@@ -1980,3 +1980,32 @@ export const atlasNarratives = [
     ]
   }
 ];
+
+
+atlasNarratives.unshift(
+  {
+    phase: "MS lesion walkthrough",
+    title: "Healthy internode to demyelinated segment",
+    description: "Follow the axon from compact pale myelin into the orange lesion zone where exposed membrane, debris, microglia, and an inflammatory plaque interrupt normal insulation.",
+    tags: ["multiple sclerosis", "myelin", "demyelination", "axon"]
+  },
+  {
+    phase: "Signal propagation",
+    title: "Action potential delay at damaged myelin",
+    description: "The moving yellow pulses show neural signal flow and visibly distort near the demyelinated zone, linking structure to conduction impairment.",
+    tags: ["neuron", "electrical", "axon", "animated"]
+  },
+  {
+    phase: "Glial response",
+    title: "Oligodendrocyte, astrocyte, and microglia roles",
+    description: "The surrounding glial cells help the viewer distinguish myelin-forming support, reactive boundary behavior, and debris-clearing immune surveillance.",
+    tags: ["oligodendrocyte", "astrocyte", "microglia", "support"]
+  },
+  {
+    phase: "Interactive inspection",
+    title: "Click components to read local biology",
+    description: "The soma, dendrites, axon, myelin wraps, nodes of Ranvier, lesion cloud, and animated pulses all carry component-specific information panels.",
+    tags: ["interaction", "education", "neuron", "myelin"]
+  }
+);
+

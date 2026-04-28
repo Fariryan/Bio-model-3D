@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { clamp } from "../utils/format.js";
 import { getMorphologyProfile } from "../data/morphologyProfiles.js";
-import { getNeuralMorphology } from "../data/neuronMorphologies.js";
 
 const COLOR_MAP = {
   membrane: "#6de9ff",
@@ -14,6 +13,13 @@ const COLOR_MAP = {
   vesicle: "#9ce8ff",
   cytoskeleton: "#7ca7ff",
   ribosome: "#f6f8ff",
+  myelin: "#e9f4ff",
+  exposedAxon: "#ffb36e",
+  node: "#fff7a8",
+  microglia: "#9df7a5",
+  astrocyte: "#8fd6ff",
+  inflammatory: "#ff6a82",
+  signal: "#fff36d",
 };
 
 const MOUSE_ROTATE = 0;
@@ -23,10 +29,10 @@ const MOUSE_PAN = 2;
 function createMaterial(color, overrides = {}) {
   return new THREE.MeshPhysicalMaterial({
     color,
-    roughness: 0.34,
+    roughness: 0.35,
     metalness: 0.03,
     transparent: true,
-    opacity: 0.94,
+    opacity: 0.96,
     ...overrides,
   });
 }
@@ -39,8 +45,8 @@ function deformSphere(geometry, radius, noise) {
     const wrinkle =
       1 +
       Math.sin(vector.x * noise.scaleX) * noise.amplitude +
-      Math.cos(vector.y * noise.scaleY) * noise.amplitude * 0.72 +
-      Math.sin(vector.z * noise.scaleZ) * noise.amplitude * 0.58;
+      Math.cos(vector.y * noise.scaleY) * noise.amplitude * 0.75 +
+      Math.sin(vector.z * noise.scaleZ) * noise.amplitude * 0.55;
     vector.normalize().multiplyScalar(radius * wrinkle);
     position.setXYZ(index, vector.x, vector.y, vector.z);
   }
@@ -58,14 +64,50 @@ function addCurveTubes(group, curves, material, radius, tubularSegments = 80, ra
   });
 }
 
-function magnitudeFromArray(values) {
-  return Math.max(...values.map((value) => Math.abs(value)));
+function seededRandom(seed) {
+  let state = seed % 2147483647;
+  if (state <= 0) state += 2147483646;
+  return () => {
+    state = (state * 16807) % 2147483647;
+    return (state - 1) / 2147483646;
+  };
+}
+
+function pointInEllipsoid(center, rx, ry, rz, rand = Math.random, margin = 0.72) {
+  const theta = rand() * Math.PI * 2;
+  const phi = Math.acos(2 * rand() - 1);
+  const radius = Math.cbrt(rand()) * margin;
+  return center.clone().add(new THREE.Vector3(
+    Math.sin(phi) * Math.cos(theta) * rx * radius,
+    Math.cos(phi) * ry * radius,
+    Math.sin(phi) * Math.sin(theta) * rz * radius,
+  ));
+}
+
+function safeInteriorRadii(morphology, profile) {
+  if (profile.family === "muscle") return { x: 1.95, y: 0.62, z: 0.62 };
+  if (profile.family === "hepatocyte") return { x: 1.55, y: 1.18, z: 1.38 };
+  if (profile.family === "epithelial") return { x: 1.12, y: 1.25, z: 0.95 };
+  if (profile.family === "immune") return { x: 1.05, y: 1.0, z: 1.05 };
+  if (profile.family === "oocyte") return { x: 1.75, y: 1.75, z: 1.75 };
+  if (profile.family === "neuron" || profile.family === "msNeuron") return { x: 1.0, y: 0.86, z: 0.92 };
+  const r = Math.max(0.9, morphology.somaRadius * 0.72);
+  return { x: r, y: r * 0.92, z: r };
+}
+
+function organellePoint(morphology, profile, seed, margin = 0.72) {
+  const rand = seededRandom(seed);
+  const radii = safeInteriorRadii(morphology, profile);
+  return pointInEllipsoid(morphology.somaCenter, radii.x, radii.y, radii.z, rand, margin);
+}
+
+function orientAlongVector(mesh, vector) {
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), vector.clone().normalize());
 }
 
 export class CellScene {
-  constructor(container, options = {}) {
+  constructor(container) {
     this.container = container;
-    this.onSelectionChange = options.onSelectionChange || (() => {});
     this.clock = new THREE.Clock();
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.FogExp2("#07101c", 0.022);
@@ -73,7 +115,7 @@ export class CellScene {
       40,
       container.clientWidth / container.clientHeight,
       0.1,
-      180,
+      150,
     );
     this.defaultCamera = new THREE.Vector3(0, 1.2, 8.8);
     this.camera.position.copy(this.defaultCamera);
@@ -83,12 +125,11 @@ export class CellScene {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
-
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.07;
     this.controls.minDistance = 2.8;
-    this.controls.maxDistance = 26;
+    this.controls.maxDistance = 24;
     this.controls.autoRotateSpeed = 0.35;
     this.controls.screenSpacePanning = true;
     this.controls.mouseButtons = {
@@ -99,38 +140,39 @@ export class CellScene {
 
     this.root = new THREE.Group();
     this.cellGroup = new THREE.Group();
-    this.signalGroup = new THREE.Group();
     this.annotationGroup = new THREE.Group();
-    this.root.add(this.cellGroup, this.signalGroup, this.annotationGroup);
+    this.root.add(this.cellGroup, this.annotationGroup);
     this.scene.add(this.root);
 
     this.floaters = [];
-    this.motionPaths = [];
     this.explodable = [];
     this.componentGroups = {};
     this.activeModel = null;
     this.activeProfile = null;
-    this.activeNeuralAtlas = null;
-    this.currentOuterRadius = 8;
     this.stateTension = 0.25;
     this.explodeAmount = 0;
     this.showWireframe = false;
     this.showXRay = false;
-    this.selection = null;
-    this.highlightedMaterial = null;
-    this.highlightedPreviousEmissive = null;
-
-    this.pointer = new THREE.Vector2();
+    this.interactiveObjects = [];
+    this.signalPulses = [];
+    this.reactiveMeshes = [];
+    this.selectionHalo = null;
+    this.selectedInteractive = null;
+    this.selectionCallback = null;
     this.raycaster = new THREE.Raycaster();
+    this.pointer = new THREE.Vector2();
+
+    this.handlePointerDown = this.handlePointerDown.bind(this);
+    this.handlePointerMove = this.handlePointerMove.bind(this);
+    this.renderer.domElement.addEventListener("pointerdown", this.handlePointerDown);
+    this.renderer.domElement.addEventListener("pointermove", this.handlePointerMove);
 
     this.setupEnvironment();
     this.setupLights();
 
     this.handleResize = this.handleResize.bind(this);
-    this.handlePointerDown = this.handlePointerDown.bind(this);
     this.animate = this.animate.bind(this);
     window.addEventListener("resize", this.handleResize);
-    this.renderer.domElement.addEventListener("pointerdown", this.handlePointerDown);
     this.animate();
   }
 
@@ -146,6 +188,7 @@ export class CellScene {
       positions[index * 3 + 1] = radius * Math.cos(phi);
       positions[index * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
     }
+
     starGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     this.stars = new THREE.Points(
       starGeometry,
@@ -180,8 +223,11 @@ export class CellScene {
           node.geometry.dispose();
         }
         if (node.material) {
-          const materials = Array.isArray(node.material) ? node.material : [node.material];
-          materials.forEach((material) => material.dispose());
+          if (Array.isArray(node.material)) {
+            node.material.forEach((item) => item.dispose());
+          } else {
+            node.material.dispose();
+          }
         }
       });
     }
@@ -189,26 +235,128 @@ export class CellScene {
 
   clearModel() {
     this.clearGroup(this.cellGroup);
-    this.clearGroup(this.signalGroup);
     this.clearGroup(this.annotationGroup);
     this.floaters = [];
-    this.motionPaths = [];
     this.explodable = [];
     this.componentGroups = {};
-    this.activeNeuralAtlas = null;
-    this.clearSelection();
+    this.interactiveObjects = [];
+    this.signalPulses = [];
+    this.reactiveMeshes = [];
+    this.selectionHalo = null;
+    this.selectedInteractive = null;
+  }
+
+  setSelectionCallback(callback) {
+    this.selectionCallback = callback;
+  }
+
+  createComponentInfo(id, title, category, detail, markers = []) {
+    return {
+      id,
+      title,
+      category,
+      detail,
+      markers,
+    };
+  }
+
+  registerInteractive(object, info) {
+    object.userData.componentInfo = info;
+    object.traverse?.((node) => {
+      node.userData.componentInfo = info;
+      if (node.isMesh || node.isLine || node.isPoints) {
+        this.interactiveObjects.push(node);
+      }
+    });
+    return object;
+  }
+
+  eventToPointer(event) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  }
+
+  findInteractiveTarget(event) {
+    if (!this.interactiveObjects.length) return null;
+    this.eventToPointer(event);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.interactiveObjects, true);
+    if (!hits.length) return null;
+    let target = hits[0].object;
+    while (target && !target.userData.componentInfo) {
+      target = target.parent;
+    }
+    return target;
+  }
+
+  handlePointerMove(event) {
+    const target = this.findInteractiveTarget(event);
+    this.renderer.domElement.style.cursor = target ? "pointer" : "grab";
+  }
+
+  handlePointerDown(event) {
+    const target = this.findInteractiveTarget(event);
+    if (!target) return;
+    this.selectInteractive(target);
+  }
+
+  selectInteractive(target) {
+    const info = target.userData.componentInfo;
+    if (!info) return;
+    this.selectedInteractive = target;
+    this.drawSelectionHalo(target, info);
+    if (this.selectionCallback) {
+      this.selectionCallback(info);
+    }
+  }
+
+  drawSelectionHalo(target, info) {
+    if (this.selectionHalo) {
+      this.annotationGroup.remove(this.selectionHalo);
+      this.selectionHalo.traverse?.((node) => {
+        node.geometry?.dispose?.();
+        if (node.material) {
+          if (Array.isArray(node.material)) node.material.forEach((material) => material.dispose());
+          else node.material.dispose();
+        }
+      });
+    }
+
+    const box = new THREE.Box3().setFromObject(target);
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+    const radius = clamp(Math.max(size.x, size.y, size.z) * 0.62, 0.28, 1.75);
+    const halo = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({
+      color: info.category === "damage" ? COLOR_MAP.inflammatory : COLOR_MAP.signal,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+    });
+    const ringA = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.018, 8, 96), material);
+    const ringB = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.78, 0.012, 8, 96), material.clone());
+    ringA.rotation.x = Math.PI / 2;
+    ringB.rotation.y = Math.PI / 2;
+    halo.add(ringA, ringB);
+    halo.position.copy(center);
+    halo.name = "selected-component-halo";
+    this.selectionHalo = halo;
+    this.annotationGroup.add(halo);
+    this.controls.target.lerp(center, 0.35);
   }
 
   setModel(model) {
     this.activeModel = model;
     this.activeProfile = getMorphologyProfile(model.id);
-    this.activeNeuralAtlas = getNeuralMorphology(model.id);
     this.clearModel();
 
-    const morphology = this.buildMorphology(model, this.activeProfile, this.activeNeuralAtlas);
-    const organelles = this.buildOrganelles(model, this.activeProfile, morphology);
+    const builders = this.getFamilyBuilder(this.activeProfile.family);
+    const morphology = builders.createOutline.call(this, model, this.activeProfile);
+    const organelles = builders.createOrganelles.call(this, model, this.activeProfile, morphology);
 
-    this.currentOuterRadius = morphology.outerRadius || model.geometry.radius;
     this.componentGroups = {
       membrane: morphology.membraneGroup,
       nucleus: organelles.nucleusGroup,
@@ -221,7 +369,12 @@ export class CellScene {
       ribosomes: organelles.ribosomeGroup,
       processes: morphology.processGroup,
       projections: morphology.projectionGroup,
-      pathways: morphology.pathwayGroup,
+      myelin: morphology.myelinGroup,
+      nodes: morphology.nodeGroup,
+      glia: morphology.gliaGroup,
+      immune: morphology.immuneGroup,
+      signals: morphology.signalGroup,
+      damage: morphology.damageGroup,
     };
 
     Object.values(this.componentGroups).forEach((group) => {
@@ -233,43 +386,34 @@ export class CellScene {
     this.applyRenderMode();
     this.applyExplode();
     this.resetView();
-    this.onSelectionChange(null);
   }
 
-  buildMorphology(model, profile, neuralAtlas) {
-    const family = profile.family;
-    if ((family === "neuron" || family === "glia") && neuralAtlas) {
-      return this.buildAtlasNeuralMorphology(model, profile, neuralAtlas);
-    }
-
-    const generic = {
-      hepatocyte: () => this.buildHepatocyteMorphology(model),
-      immune: () => this.buildImmuneMorphology(model),
-      epithelial: () => this.buildEpithelialMorphology(model),
-      muscle: () => this.buildMuscleMorphology(model),
-      melanocyte: () => this.buildMelanocyteMorphology(model),
-      oocyte: () => this.buildOocyteMorphology(model),
-      embryonic: () => this.buildEmbryonicMorphology(model),
-      neuron: () => this.buildFallbackNeuronMorphology(model),
-      glia: () => this.buildFallbackGliaMorphology(model),
-      generic: () => this.buildGenericMorphology(model),
+  getFamilyBuilder(family) {
+    const mapping = {
+      neuron: this.buildNeuronMorphology,
+      msNeuron: this.buildMultipleSclerosisNeuronMorphology,
+      glia: this.buildGliaMorphology,
+      hepatocyte: this.buildHepatocyteMorphology,
+      immune: this.buildImmuneMorphology,
+      epithelial: this.buildEpithelialMorphology,
+      muscle: this.buildMuscleMorphology,
+      melanocyte: this.buildMelanocyteMorphology,
+      oocyte: this.buildOocyteMorphology,
+      embryonic: this.buildEmbryonicMorphology,
+      generic: this.buildGenericMorphology,
     };
 
-    return (generic[family] || generic.generic)();
+    const create = mapping[family] || mapping.generic;
+    return {
+      createOutline: create,
+      createOrganelles: this.buildOrganelles,
+    };
   }
 
   createGroup(name) {
     const group = new THREE.Group();
     group.name = name;
     return group;
-  }
-
-  toVector3(values) {
-    return new THREE.Vector3(values[0], values[1], values[2]);
-  }
-
-  buildCurveFromPoints(points) {
-    return new THREE.CatmullRomCurve3(points.map((item) => this.toVector3(item)));
   }
 
   registerExplodable(mesh, vector) {
@@ -280,495 +424,740 @@ export class CellScene {
     });
   }
 
-  sampleInsideEllipsoid(center, radii, margin = 0.14) {
-    const local = new THREE.Vector3();
-    do {
-      local.set(
-        (Math.random() * 2 - 1) * (radii.x - margin),
-        (Math.random() * 2 - 1) * (radii.y - margin),
-        (Math.random() * 2 - 1) * (radii.z - margin),
-      );
-    } while (
-      (local.x * local.x) / ((radii.x - margin) * (radii.x - margin)) +
-        (local.y * local.y) / ((radii.y - margin) * (radii.y - margin)) +
-        (local.z * local.z) / ((radii.z - margin) * (radii.z - margin)) >
-      1
-    );
-    return center.clone().add(local);
-  }
-
-  buildAnnotation({ category, title, description, tags }) {
-    return { category, title, description, tags };
-  }
-
-  attachAnnotation(object, annotation) {
-    object.userData.annotation = annotation;
-    return object;
-  }
-
-  setObjectLayer(group, annotation, meshes = []) {
-    this.attachAnnotation(group, annotation);
-    meshes.forEach((mesh) => this.attachAnnotation(mesh, annotation));
-  }
-
-  createSpinesForBranch(group, branch, color) {
-    if (!branch.spineDensity || branch.spineDensity <= 0) {
-      return [];
-    }
-    const created = [];
-    const step = Math.max(2, Math.round(8 / branch.spineDensity));
-    for (let index = 1; index < branch.points.length - 1; index += step) {
-      const current = this.toVector3(branch.points[index]);
-      const previous = this.toVector3(branch.points[index - 1]);
-      const next = this.toVector3(branch.points[Math.min(index + 1, branch.points.length - 1)]);
-      const tangent = next.clone().sub(previous).normalize();
-      const side = new THREE.Vector3(-tangent.z, tangent.x, tangent.y).normalize();
-      const spine = new THREE.Mesh(
-        new THREE.ConeGeometry(0.012, 0.075, 6),
-        new THREE.MeshBasicMaterial({
-          color,
-          transparent: true,
-          opacity: 0.82,
-        }),
-      );
-      spine.position.copy(current).add(side.multiplyScalar(0.06));
-      spine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
-      group.add(spine);
-      created.push(spine);
-    }
-    return created;
-  }
-
-  createBoutonsForBranch(group, branch, color) {
-    if (!branch.boutonSpacing || branch.boutonSpacing <= 0) {
-      return [];
-    }
-    const created = [];
-    const step = Math.max(2, Math.round(5 / branch.boutonSpacing));
-    for (let index = 2; index < branch.points.length - 2; index += step) {
-      const current = this.toVector3(branch.points[index]);
-      const bouton = new THREE.Mesh(
-        new THREE.SphereGeometry(0.05 + branch.radius * 0.9, 10, 10),
-        createMaterial(color, {
-          emissive: new THREE.Color("#183f4d"),
-          opacity: 0.86,
-          transmission: 0.12,
-        }),
-      );
-      bouton.position.copy(current);
-      group.add(bouton);
-      this.floaters.push({ mesh: bouton, axis: "y", speed: 0.18 + index * 0.01, range: 0.01 });
-      created.push(bouton);
-    }
-    return created;
-  }
-
-  createSignalPulse(curve, color, speed, size, annotation) {
-    const mesh = this.attachAnnotation(
-      new THREE.Mesh(
-        new THREE.SphereGeometry(size, 12, 12),
-        createMaterial(color, {
-          emissive: new THREE.Color(color).multiplyScalar(0.65),
-          roughness: 0.08,
-          transmission: 0.25,
-          opacity: 0.92,
-        }),
-      ),
-      annotation,
-    );
-    this.signalGroup.add(mesh);
-    this.motionPaths.push({
-      mesh,
-      curve,
-      speed,
-      offset: Math.random(),
-      mode: "loop",
-    });
-  }
-
-  createNeuralSignals(model, neuralCurves, boutons) {
-    const axons = neuralCurves.filter((item) => item.branch.kind === "axon");
-    axons.forEach((item) => {
-      for (let index = 0; index < 3; index += 1) {
-        this.createSignalPulse(
-          item.curve,
-          "#7dd6ff",
-          0.08 + index * 0.022,
-          0.065,
-          this.buildAnnotation({
-            category: "Electrical signal",
-            title: "Action potential propagation",
-            description:
-              "These pulses travel from the axon initial segment toward boutons, representing depolarization and saltatory-like forward conduction in the projection path.",
-            tags: ["axon", "depolarization", "propagation"],
-          }),
-        );
-      }
-    });
-
-    boutons.slice(0, 18).forEach((bouton, index) => {
-      const vesicle = this.attachAnnotation(
-        new THREE.Mesh(
-          new THREE.SphereGeometry(0.03, 8, 8),
-          createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, {
-            emissive: new THREE.Color("#1b4554"),
-            opacity: 0.9,
-            transmission: 0.18,
-          }),
-        ),
-        this.buildAnnotation({
-          category: "Synaptic release",
-          title: "Neurotransmitter vesicle packet",
-          description:
-            "These vesicle packets circulate around presynaptic boutons and represent transmitter loading, docking, and release near the active zone.",
-          tags: ["synapse", "vesicle", "neurotransmitter"],
-        }),
-      );
-      this.signalGroup.add(vesicle);
-      this.motionPaths.push({
-        mesh: vesicle,
-        anchor: bouton.position.clone(),
-        speed: 0.2 + index * 0.005,
-        radius: 0.12 + (index % 3) * 0.03,
-        offset: index / 18,
-        mode: "orbit",
-      });
-    });
-  }
-
-  buildAtlasNeuralMorphology(model, profile, atlas) {
-    const membraneGroup = this.createGroup("membrane");
-    const processGroup = this.createGroup("processes");
-    const projectionGroup = this.createGroup("projections");
-    const pathwayGroup = this.createGroup("pathways");
-    const boutonMeshes = [];
-
-    const somaRadii = new THREE.Vector3(...atlas.soma.radii);
-    const somaCenter = this.toVector3(atlas.soma.center);
-    const somaGeometry = new THREE.SphereGeometry(1, 40, 40);
-    somaGeometry.scale(somaRadii.x, somaRadii.y, somaRadii.z);
-    const soma = new THREE.Mesh(
-      somaGeometry,
-      createMaterial(model.palette.membrane, {
-        emissive: new THREE.Color(model.palette.membraneGlow),
-        transmission: 0.28,
-        thickness: 0.22,
-      }),
-    );
-    soma.position.copy(somaCenter);
-    soma.rotation.set(...atlas.soma.orientation);
-    membraneGroup.add(soma);
-    this.setObjectLayer(
-      membraneGroup,
-      this.buildAnnotation({
-        category: profile.family === "glia" ? "Glial soma" : "Neuronal soma",
-        title: atlas.brainMeta.displayName,
-        description: atlas.brainMeta.laminarContext,
-        tags: [atlas.brainMeta.regionContext, atlas.brainMeta.cellClass],
-      }),
-      [soma],
-    );
-
-    const branchMaterial = createMaterial(model.palette.membrane, {
-      emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.12,
-      opacity: 0.9,
-    });
-    const fineMaterial = createMaterial(model.palette.membrane, {
-      emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.05,
-      opacity: 0.8,
-    });
-
-    const neuralCurves = [];
-    atlas.branches.forEach((branch) => {
-      const curve = this.buildCurveFromPoints(branch.points);
-      neuralCurves.push({ curve, branch });
-      const targetGroup =
-        branch.kind === "axon" || branch.kind === "axonCollateral" || branch.kind === "endfoot"
-          ? projectionGroup
-          : processGroup;
-      const radius = branch.radius;
-      const mesh = new THREE.Mesh(
-        new THREE.TubeGeometry(curve, Math.max(24, branch.points.length * 6), radius, branch.kind === "glialFine" ? 6 : 10, false),
-        (branch.kind === "axon" || branch.kind === "axonCollateral" || branch.kind === "glialFine")
-          ? fineMaterial
-          : branchMaterial,
-      );
-
-      const annotationByKind = {
-        apical: this.buildAnnotation({
-          category: "Dendrite",
-          title: "Apical dendrite",
-          description:
-            "The apical tree carries excitatory inputs and extends away from the soma toward distal laminar targets.",
-          tags: ["apical", "input integration", atlas.brainMeta.regionContext],
-        }),
-        basal: this.buildAnnotation({
-          category: "Dendrite",
-          title: "Basal dendrite",
-          description:
-            "Basal dendrites spread laterally from the soma and host dense dendritic spines for local excitatory integration.",
-          tags: ["basal arbor", "spines", "synaptic input"],
-        }),
-        axon: this.buildAnnotation({
-          category: "Axon",
-          title: "Projection axon",
-          description:
-            "This axon arises from the soma base and carries action potentials toward distal targets and local boutons.",
-          tags: ["axon", "action potential", "output"],
-        }),
-        axonCollateral: this.buildAnnotation({
-          category: "Synaptic output",
-          title: "Axon collateral",
-          description:
-            "Local collaterals branch from the axon and terminate in bouton-like swellings used for neurotransmitter release.",
-          tags: ["collateral", "bouton", "neurotransmitter"],
-        }),
-        glialPrimary: this.buildAnnotation({
-          category: "Astrocyte process",
-          title: "Primary astrocytic process",
-          description:
-            "Primary processes radiate from the astrocyte soma and support the larger territorial arbor.",
-          tags: ["glia", "territory", "support"],
-        }),
-        glialSecondary: this.buildAnnotation({
-          category: "Astrocyte branchlet",
-          title: "Fine astrocytic branch",
-          description:
-            "Fine branchlets reach into the neuropil and are used here to suggest perisynaptic coverage.",
-          tags: ["branchlet", "perisynaptic", "astrocyte"],
-        }),
-        glialFine: this.buildAnnotation({
-          category: "Astrocyte fine process",
-          title: "Fine astrocytic process",
-          description:
-            "These finest branches represent the dense unresolved glial arbor that surrounds synapses and extracellular space.",
-          tags: ["fine process", "glia", "coverage"],
-        }),
-        endfoot: this.buildAnnotation({
-          category: "Astrocyte endfoot",
-          title: "Vascular endfoot-like termination",
-          description:
-            "The broader terminal pad suggests astrocytic endfoot morphology associated with vascular and barrier interfaces.",
-          tags: ["endfoot", "vascular", "astrocyte"],
-        }),
-      };
-
-      this.attachAnnotation(mesh, annotationByKind[branch.kind] || annotationByKind.apical);
-      targetGroup.add(mesh);
-
-      const createdSpines = this.createSpinesForBranch(
-        targetGroup,
-        branch,
-        model.palette.ribosome || COLOR_MAP.ribosome,
-      );
-      createdSpines.forEach((item) =>
-        this.attachAnnotation(
-          item,
-          this.buildAnnotation({
-            category: "Synaptic spine",
-            title: "Dendritic spine field",
-            description:
-              "Spines are represented as dense protrusions on dendrites where excitatory postsynaptic signaling is concentrated.",
-            tags: ["spine", "postsynaptic", "plasticity"],
-          }),
-        ),
-      );
-
-      const createdBoutons = this.createBoutonsForBranch(
-        targetGroup,
-        branch,
-        model.palette.vesicle || COLOR_MAP.vesicle,
-      );
-      createdBoutons.forEach((item) =>
-        this.attachAnnotation(
-          item,
-          this.buildAnnotation({
-            category: "Synaptic bouton",
-            title: "Presynaptic bouton",
-            description:
-              "Bouton swellings represent transmitter release sites where vesicle-rich terminals contact downstream cells.",
-            tags: ["bouton", "release site", "synapse"],
-          }),
-        ),
-      );
-      boutonMeshes.push(...createdBoutons);
-
-      if (branch.kind === "endfoot") {
-        const endPoint = this.toVector3(branch.points[branch.points.length - 1]);
-        const pad = new THREE.Mesh(
-          new THREE.SphereGeometry(branch.radius * 1.8, 12, 12),
-          createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, {
-            emissive: new THREE.Color("#173848"),
-            opacity: 0.72,
-            transmission: 0.18,
-          }),
-        );
-        pad.position.copy(endPoint);
-        this.attachAnnotation(
-          pad,
-          this.buildAnnotation({
-            category: "Astrocyte endfoot",
-            title: "Endfoot terminal pad",
-            description:
-              "Terminal pads suggest the broadened astrocytic surface used for vascular or barrier contact.",
-            tags: ["endfoot", "vascular interface", "glia"],
-          }),
-        );
-        projectionGroup.add(pad);
-      }
-    });
-
-    this.createNeuralSignals(model, neuralCurves, boutonMeshes);
-    this.setObjectLayer(
-      pathwayGroup,
-      this.buildAnnotation({
-        category: "Pathway animation",
-        title: "Activity overlays",
-        description:
-          "Animated pulses trace action potentials along axons and vesicle trafficking around boutons to illustrate electrical and chemical signaling.",
-        tags: ["activity", "pathway", "animation"],
-      }),
-    );
-
-    this.registerExplodable(membraneGroup, new THREE.Vector3(-0.4, 0.6, 0.2));
-    this.registerExplodable(processGroup, new THREE.Vector3(0.6, 0.3, 0.1));
-    this.registerExplodable(projectionGroup, new THREE.Vector3(-0.1, 1, 0.5));
-
-    return {
-      membraneGroup,
-      processGroup,
-      projectionGroup,
-      pathwayGroup,
-      somaCenter,
-      somaRadii,
-      somaRadius: Math.max(somaRadii.x, somaRadii.y, somaRadii.z),
-      outerRadius:
-        Math.max(
-          ...atlas.branches.flatMap((branch) =>
-            branch.points.map(([x, y, z]) => Math.sqrt(x * x + y * y + z * z)),
-          ),
-        ) + 0.7,
-      processCurves: neuralCurves.map((item) => item.curve),
-      neuralCurves,
-      axonCurves: neuralCurves
-        .filter((item) => item.branch.kind === "axon" || item.branch.kind === "axonCollateral")
-        .map((item) => item.curve),
-      shell: soma,
-    };
-  }
-
   buildGenericMorphology(model) {
     const membraneGroup = this.createGroup("membrane");
     const processGroup = this.createGroup("processes");
     const projectionGroup = this.createGroup("projections");
-    const pathwayGroup = this.createGroup("pathways");
-    const radii = new THREE.Vector3(model.geometry.radius * 0.96, model.geometry.radius * 0.92, model.geometry.radius * 0.94);
-    const shellGeometry = new THREE.SphereGeometry(1, 34, 34);
-    shellGeometry.scale(radii.x, radii.y, radii.z);
+    const shellGeometry = new THREE.IcosahedronGeometry(model.geometry.radius, 24);
     deformSphere(shellGeometry, model.geometry.radius, {
       scaleX: model.geometry.wrinkleScale,
       scaleY: model.geometry.wrinkleScale * 0.75,
       scaleZ: model.geometry.wrinkleScale * 1.1,
-      amplitude: model.geometry.wrinkleAmp * 0.75,
+      amplitude: model.geometry.wrinkleAmp,
     });
+
     const shell = new THREE.Mesh(
       shellGeometry,
       createMaterial(model.palette.membrane || COLOR_MAP.membrane, {
         emissive: new THREE.Color(model.palette.membraneGlow || "#0d3345"),
-        transmission: 0.4,
-        thickness: 0.48,
-        clearcoat: 0.9,
+        transmission: 0.48,
+        thickness: 0.85,
+        opacity: 0.92,
+        clearcoat: 1,
+        clearcoatRoughness: 0.16,
       }),
     );
     membraneGroup.add(shell);
-    this.setObjectLayer(
-      membraneGroup,
-      this.buildAnnotation({
-        category: "Cell membrane",
-        title: `${model.name} membrane`,
-        description:
-          "The membrane encloses the cytoplasm and its main organelles. Internal components are constrained to the interior volume in this view.",
-        tags: ["membrane", model.species, model.tissue],
-      }),
-      [shell],
-    );
     this.registerExplodable(membraneGroup, new THREE.Vector3(0, 1, 0.4));
     return {
       membraneGroup,
       processGroup,
       projectionGroup,
-      pathwayGroup,
       shell,
       somaCenter: new THREE.Vector3(0, 0, 0),
-      somaRadii: radii,
       somaRadius: model.geometry.radius,
-      outerRadius: model.geometry.radius + 0.4,
-      processCurves: [],
-      axonCurves: [],
+      outerRadius: model.geometry.radius,
     };
   }
 
+  buildNeuronMorphology(model) {
+    const membraneGroup = this.createGroup("membrane");
+    const processGroup = this.createGroup("processes");
+    const projectionGroup = this.createGroup("projections");
+
+    const somaGeometry = new THREE.IcosahedronGeometry(1.45, 18);
+    deformSphere(somaGeometry, 1.45, { scaleX: 3.6, scaleY: 2.8, scaleZ: 3.2, amplitude: 0.07 });
+    somaGeometry.scale(1.12, 0.94, 1.02);
+    const soma = new THREE.Mesh(
+      somaGeometry,
+      createMaterial(model.palette.membrane, {
+        emissive: new THREE.Color(model.palette.membraneGlow),
+        transmission: 0.38,
+        thickness: 0.45,
+      }),
+    );
+    membraneGroup.add(soma);
+
+    const dendriteCurves = [
+      new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-1.1, 0.5, 0.2),
+        new THREE.Vector3(-2.4, 1.4, 0.6),
+        new THREE.Vector3(-3.5, 2.1, 0.3),
+        new THREE.Vector3(-4.3, 2.8, -0.4),
+      ]),
+      new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-0.7, -0.2, 0.8),
+        new THREE.Vector3(-1.9, -0.7, 1.5),
+        new THREE.Vector3(-3.1, -1.1, 1.9),
+        new THREE.Vector3(-4.0, -1.8, 2.2),
+      ]),
+      new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0.3, 0.9, -0.6),
+        new THREE.Vector3(0.2, 2.0, -1.5),
+        new THREE.Vector3(-0.6, 2.9, -2.0),
+        new THREE.Vector3(-1.3, 3.8, -2.4),
+      ]),
+    ];
+
+    addCurveTubes(
+      processGroup,
+      dendriteCurves,
+      createMaterial(model.palette.membrane, {
+        emissive: new THREE.Color(model.palette.membraneGlow),
+        transmission: 0.22,
+        opacity: 0.9,
+      }),
+      0.12,
+      96,
+      12,
+    );
+
+    dendriteCurves.forEach((curve, index) => {
+      const branchPoints = curve.getPoints(6);
+      [3, 4].forEach((branchIndex) => {
+        const basePoint = branchPoints[branchIndex];
+        const branch = new THREE.CatmullRomCurve3([
+          basePoint,
+          basePoint.clone().add(new THREE.Vector3(0.42 + index * 0.08, 0.34 - index * 0.13, 0.38 - index * 0.22)),
+          basePoint.clone().add(new THREE.Vector3(0.88 + index * 0.1, 0.66 - index * 0.14, 0.82 - index * 0.28)),
+        ]);
+        addCurveTubes(
+          projectionGroup,
+          [branch],
+          createMaterial(model.palette.membrane, {
+            emissive: new THREE.Color(model.palette.membraneGlow),
+            transmission: 0.18,
+            opacity: 0.82,
+          }),
+          0.045,
+          56,
+          10,
+        );
+      });
+
+      curve.getPoints(18).slice(4, 15).forEach((point, spineIndex) => {
+        if (spineIndex % 2 !== 0) return;
+        const spine = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.015, 0.09, 4, 8),
+          createMaterial(model.palette.membrane, {
+            emissive: new THREE.Color(model.palette.membraneGlow),
+            transmission: 0.12,
+            opacity: 0.72,
+          }),
+        );
+        const normal = new THREE.Vector3(Math.sin(spineIndex), 0.55, Math.cos(spineIndex)).normalize();
+        spine.position.copy(point).add(normal.clone().multiplyScalar(0.11));
+        orientAlongVector(spine, normal);
+        projectionGroup.add(spine);
+      });
+    });
+
+    const axonCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(1.15, -0.2, 0.1),
+      new THREE.Vector3(2.4, -0.3, 0.1),
+      new THREE.Vector3(4.8, 0.3, -0.3),
+      new THREE.Vector3(7.4, 0.8, -0.2),
+      new THREE.Vector3(10.0, 1.4, 0.4),
+    ]);
+    addCurveTubes(
+      processGroup,
+      [axonCurve],
+      createMaterial(model.palette.membrane, {
+        emissive: new THREE.Color(model.palette.membraneGlow),
+        transmission: 0.18,
+      }),
+      0.07,
+      144,
+      12,
+    );
+
+    for (let index = 0; index < 7; index += 1) {
+      const t = 0.22 + index * 0.1;
+      const point = axonCurve.getPoint(Math.min(t, 0.95));
+      const bouton = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 12, 12),
+        createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, {
+          emissive: new THREE.Color("#18414d"),
+          opacity: 0.88,
+        }),
+      );
+      bouton.position.copy(point).add(new THREE.Vector3(0, Math.sin(index) * 0.18, Math.cos(index) * 0.12));
+      projectionGroup.add(bouton);
+      this.floaters.push({ mesh: bouton, axis: "y", speed: 0.35 + index * 0.05, range: 0.02 });
+    }
+
+    this.registerExplodable(membraneGroup, new THREE.Vector3(-1, 0.6, 0.2));
+    this.registerExplodable(processGroup, new THREE.Vector3(1, 0.1, 0.1));
+    this.registerExplodable(projectionGroup, new THREE.Vector3(-0.2, 1, 0.4));
+
+    return {
+      membraneGroup,
+      processGroup,
+      projectionGroup,
+      somaCenter: new THREE.Vector3(-0.1, 0.1, 0),
+      somaRadius: 1.45,
+      outerRadius: 10.0,
+      processCurves: [...dendriteCurves, axonCurve],
+    };
+  }
+
+
+  buildMultipleSclerosisNeuronMorphology(model) {
+    const membraneGroup = this.createGroup("membrane");
+    const processGroup = this.createGroup("processes");
+    const projectionGroup = this.createGroup("projections");
+    const myelinGroup = this.createGroup("myelin");
+    const nodeGroup = this.createGroup("nodes");
+    const gliaGroup = this.createGroup("glia");
+    const immuneGroup = this.createGroup("immune");
+    const signalGroup = this.createGroup("signals");
+    const damageGroup = this.createGroup("damage");
+
+    const somaInfo = this.createComponentInfo(
+      "ms-soma",
+      "Neuronal soma",
+      "neuron",
+      "Main neuronal cell body containing the nucleus, rough ER, Golgi traffic, mitochondria, and the metabolic machinery needed to maintain a long axon.",
+      ["Nissl-rich soma", "integration center", "high ATP demand"],
+    );
+    const dendriteInfo = this.createComponentInfo(
+      "ms-dendrites",
+      "Dendrites and dendritic spines",
+      "neuron",
+      "Branching input arbor receives synaptic signals. Thin spine-like protrusions increase input surface area and show that this is a neuron, not a generic round cell.",
+      ["synaptic input", "branch hierarchy", "plasticity sites"],
+    );
+    const axonInfo = this.createComponentInfo(
+      "ms-axon",
+      "Axon shaft",
+      "neuron",
+      "Long output cable carrying action potentials away from the soma. The exposed orange sections are where degenerated myelin leaves the axon less insulated.",
+      ["saltatory conduction", "long-range output", "exposed membrane"],
+    );
+    const healthyMyelinInfo = this.createComponentInfo(
+      "ms-healthy-myelin",
+      "Healthy compact myelin",
+      "myelin",
+      "Layered insulating sheath wrapped around axon internodes. In a healthy region, impulses jump efficiently between nodes of Ranvier.",
+      ["oligodendrocyte wrapping", "compact insulation", "fast conduction"],
+    );
+    const damagedMyelinInfo = this.createComponentInfo(
+      "ms-damaged-myelin",
+      "Degenerated myelin segment",
+      "damage",
+      "Broken, thinned, and displaced myelin around the axon. This lesion-like zone visualizes demyelination, debris, inflammatory proximity, and slower signal propagation.",
+      ["demyelination", "conduction delay", "debris field"],
+    );
+    const nodeInfo = this.createComponentInfo(
+      "ms-node-ranvier",
+      "Node of Ranvier",
+      "myelin",
+      "Small exposed axonal gaps between myelin internodes. These nodes concentrate ion-channel activity and allow saltatory conduction in intact axons.",
+      ["ion channels", "signal jump point", "myelin boundary"],
+    );
+    const oligodendrocyteInfo = this.createComponentInfo(
+      "ms-oligodendrocyte",
+      "Oligodendrocyte",
+      "glia",
+      "Myelin-forming CNS glial cell. Its processes extend toward internodes to represent how one oligodendrocyte can support multiple myelin wraps.",
+      ["CNS myelination", "internode support", "repair target"],
+    );
+    const astrocyteInfo = this.createComponentInfo(
+      "ms-astrocyte",
+      "Reactive astrocyte",
+      "glia",
+      "Star-shaped support cell near the lesion field. It represents homeostatic buffering, inflammatory signaling, and glial scar-like boundary behavior.",
+      ["GFAP-like morphology", "support network", "lesion boundary"],
+    );
+    const microgliaInfo = this.createComponentInfo(
+      "ms-microglia",
+      "Activated microglia",
+      "immune",
+      "Motile CNS immune cell with processes oriented toward myelin debris. It visualizes phagocytic surveillance and inflammatory activity near demyelinated axon segments.",
+      ["phagocytosis", "neuroinflammation", "debris clearance"],
+    );
+    const impulseInfo = this.createComponentInfo(
+      "ms-impulse",
+      "Animated action potential pulse",
+      "signal",
+      "Moving yellow pulses show neural signaling. Pulses accelerate over intact myelin and visibly distort near damaged internodes to show impaired conduction.",
+      ["animated conduction", "saltatory jump", "lesion delay"],
+    );
+    const plaqueInfo = this.createComponentInfo(
+      "ms-plaque",
+      "Inflammatory lesion field",
+      "damage",
+      "Semi-transparent red cloud and particles mark the local inflammatory plaque around demyelinated internodes. It is a visual abstraction, not a diagnostic map.",
+      ["local inflammation", "myelin debris", "repair pressure"],
+    );
+
+    const somaGeometry = new THREE.IcosahedronGeometry(1.28, 24);
+    deformSphere(somaGeometry, 1.28, { scaleX: 4.2, scaleY: 3.4, scaleZ: 3.8, amplitude: 0.055 });
+    somaGeometry.scale(1.08, 0.96, 1.02);
+    const soma = new THREE.Mesh(
+      somaGeometry,
+      createMaterial(model.palette.membrane, {
+        emissive: new THREE.Color(model.palette.membraneGlow),
+        transmission: 0.34,
+        thickness: 0.42,
+        opacity: 0.9,
+      }),
+    );
+    soma.name = "MS neuron soma";
+    membraneGroup.add(this.registerInteractive(soma, somaInfo));
+
+    const hillock = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.18, 0.64, 12, 22),
+      createMaterial(model.palette.exposedAxon || COLOR_MAP.exposedAxon, {
+        emissive: new THREE.Color("#4b2714"),
+        opacity: 0.92,
+      }),
+    );
+    hillock.position.set(1.1, -0.08, 0.05);
+    hillock.rotation.z = Math.PI / 2;
+    processGroup.add(this.registerInteractive(hillock, axonInfo));
+
+    const dendriteMaterial = createMaterial(model.palette.membrane, {
+      emissive: new THREE.Color(model.palette.membraneGlow),
+      transmission: 0.2,
+      opacity: 0.86,
+    });
+    const spineMaterial = createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, {
+      emissive: new THREE.Color("#0d3642"),
+      opacity: 0.72,
+    });
+    const dendriteCurves = [];
+    const dendriteSeeds = [
+      { angle: 2.75, lift: 0.55, reach: 3.8, z: 0.2 },
+      { angle: 3.55, lift: -0.28, reach: 3.5, z: 0.65 },
+      { angle: 4.15, lift: 0.82, reach: 4.2, z: -0.55 },
+      { angle: 2.1, lift: -0.65, reach: 3.1, z: -0.35 },
+      { angle: 1.55, lift: 1.05, reach: 3.4, z: 0.45 },
+      { angle: 3.0, lift: 1.35, reach: 4.4, z: -1.05 },
+      { angle: 3.9, lift: -1.15, reach: 3.9, z: 1.1 },
+    ];
+
+    dendriteSeeds.forEach((seed, index) => {
+      const start = new THREE.Vector3(Math.cos(seed.angle) * 0.9, seed.lift * 0.34, Math.sin(seed.angle) * 0.9 + seed.z * 0.12);
+      const curve = new THREE.CatmullRomCurve3([
+        start,
+        new THREE.Vector3(Math.cos(seed.angle) * 1.7, seed.lift, Math.sin(seed.angle) * 1.6 + seed.z),
+        new THREE.Vector3(Math.cos(seed.angle) * 2.6, seed.lift * 1.18 + Math.sin(index) * 0.25, Math.sin(seed.angle) * 2.2 + seed.z * 1.18),
+        new THREE.Vector3(Math.cos(seed.angle) * seed.reach, seed.lift * 1.35, Math.sin(seed.angle) * seed.reach + seed.z * 1.35),
+      ]);
+      dendriteCurves.push(curve);
+      const branchGroup = this.createGroup(`dendrite-${index + 1}`);
+      addCurveTubes(branchGroup, [curve], dendriteMaterial, 0.08 - Math.min(index, 4) * 0.005, 96, 12);
+
+      curve.getPoints(18).slice(4, 16).forEach((point, spineIndex) => {
+        if (spineIndex % 2 !== 0) return;
+        const normal = new THREE.Vector3(
+          Math.sin(spineIndex * 1.7 + index),
+          0.34 + Math.cos(index) * 0.22,
+          Math.cos(spineIndex * 1.1 - index),
+        ).normalize();
+        const spine = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.1, 4, 8), spineMaterial);
+        spine.position.copy(point).add(normal.clone().multiplyScalar(0.1));
+        orientAlongVector(spine, normal);
+        branchGroup.add(spine);
+      });
+
+      [0.56, 0.72].forEach((t, branchIndex) => {
+        const base = curve.getPoint(t);
+        const side = new THREE.Vector3(Math.cos(seed.angle + 0.75 + branchIndex), 0.35 - branchIndex * 0.2, Math.sin(seed.angle + 0.75 + branchIndex)).normalize();
+        const branch = new THREE.CatmullRomCurve3([
+          base,
+          base.clone().add(side.clone().multiplyScalar(0.48)),
+          base.clone().add(side.clone().multiplyScalar(0.98)).add(new THREE.Vector3(0, 0.18, 0)),
+        ]);
+        addCurveTubes(branchGroup, [branch], dendriteMaterial, 0.036, 50, 8);
+      });
+      processGroup.add(this.registerInteractive(branchGroup, dendriteInfo));
+    });
+
+    const axonCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(1.05, -0.08, 0.05),
+      new THREE.Vector3(2.2, -0.16, -0.05),
+      new THREE.Vector3(3.7, 0.12, -0.16),
+      new THREE.Vector3(5.4, 0.38, 0.16),
+      new THREE.Vector3(7.0, 0.24, -0.12),
+      new THREE.Vector3(8.7, 0.72, 0.24),
+      new THREE.Vector3(10.8, 1.0, 0.1),
+    ]);
+    const axonTube = new THREE.Mesh(
+      new THREE.TubeGeometry(axonCurve, 220, 0.075, 14, false),
+      createMaterial(model.palette.exposedAxon || COLOR_MAP.exposedAxon, {
+        emissive: new THREE.Color("#4d2610"),
+        opacity: 0.92,
+      }),
+    );
+    axonTube.name = "MS axon shaft";
+    processGroup.add(this.registerInteractive(axonTube, axonInfo));
+
+    const healthyMyelinMaterial = new THREE.MeshPhysicalMaterial({
+      color: model.palette.myelin || COLOR_MAP.myelin,
+      emissive: "#182b46",
+      roughness: 0.24,
+      metalness: 0.02,
+      transparent: true,
+      opacity: 0.82,
+      transmission: 0.28,
+      clearcoat: 0.7,
+    });
+    healthyMyelinMaterial.userData.baseOpacity = 0.82;
+    const damagedMyelinMaterial = new THREE.MeshPhysicalMaterial({
+      color: model.palette.damagedMyelin || "#ffb56d",
+      emissive: "#6a2412",
+      roughness: 0.48,
+      transparent: true,
+      opacity: 0.72,
+      transmission: 0.08,
+    });
+    damagedMyelinMaterial.userData.baseOpacity = 0.72;
+    const nodeMaterial = new THREE.MeshBasicMaterial({ color: model.palette.node || COLOR_MAP.node, transparent: true, opacity: 0.9 });
+
+    const internodes = [
+      { a: 0.16, b: 0.24, damaged: false },
+      { a: 0.27, b: 0.35, damaged: false },
+      { a: 0.38, b: 0.46, damaged: false },
+      { a: 0.50, b: 0.58, damaged: true },
+      { a: 0.61, b: 0.69, damaged: true },
+      { a: 0.72, b: 0.80, damaged: false },
+      { a: 0.83, b: 0.91, damaged: false },
+    ];
+
+    internodes.forEach((internode, index) => {
+      const samples = [];
+      for (let step = 0; step < 10; step += 1) {
+        const t = internode.a + ((internode.b - internode.a) * step) / 9;
+        samples.push(axonCurve.getPoint(t));
+      }
+      const segmentCurve = new THREE.CatmullRomCurve3(samples);
+      if (!internode.damaged) {
+        const segment = new THREE.Mesh(
+          new THREE.TubeGeometry(segmentCurve, 58, 0.185, 22, false),
+          healthyMyelinMaterial.clone(),
+        );
+        segment.name = `healthy myelin internode ${index + 1}`;
+        myelinGroup.add(this.registerInteractive(segment, healthyMyelinInfo));
+
+        const lamella = new THREE.Mesh(
+          new THREE.TubeGeometry(segmentCurve, 58, 0.214, 22, false),
+          new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.14, depthWrite: false }),
+        );
+        myelinGroup.add(lamella);
+      } else {
+        const partialA = new THREE.Mesh(
+          new THREE.TubeGeometry(new THREE.CatmullRomCurve3(samples.slice(0, 5)), 28, 0.17, 18, false),
+          damagedMyelinMaterial.clone(),
+        );
+        const partialB = new THREE.Mesh(
+          new THREE.TubeGeometry(new THREE.CatmullRomCurve3(samples.slice(6)), 28, 0.13, 18, false),
+          damagedMyelinMaterial.clone(),
+        );
+        partialA.name = `damaged myelin fragment ${index + 1}a`;
+        partialB.name = `damaged myelin fragment ${index + 1}b`;
+        myelinGroup.add(this.registerInteractive(partialA, damagedMyelinInfo));
+        myelinGroup.add(this.registerInteractive(partialB, damagedMyelinInfo));
+
+        for (let fragmentIndex = 0; fragmentIndex < 18; fragmentIndex += 1) {
+          const t = internode.a + (internode.b - internode.a) * (fragmentIndex / 17);
+          const center = axonCurve.getPoint(t);
+          const tangent = axonCurve.getTangent(t).normalize();
+          const radial = new THREE.Vector3(
+            Math.sin(fragmentIndex * 1.7),
+            Math.cos(fragmentIndex * 1.3),
+            Math.sin(fragmentIndex * 0.9),
+          ).cross(tangent).normalize();
+          const fragment = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.025 + (fragmentIndex % 3) * 0.006, 0.16 + (fragmentIndex % 4) * 0.035, 6, 10),
+            damagedMyelinMaterial.clone(),
+          );
+          fragment.position.copy(center).add(radial.clone().multiplyScalar(0.22 + (fragmentIndex % 5) * 0.035));
+          orientAlongVector(fragment, tangent.clone().add(radial.clone().multiplyScalar(0.5)).normalize());
+          fragment.name = "floating myelin debris";
+          damageGroup.add(this.registerInteractive(fragment, damagedMyelinInfo));
+          this.reactiveMeshes.push({ mesh: fragment, baseScale: fragment.scale.clone(), speed: 0.9 + fragmentIndex * 0.04, phase: fragmentIndex * 0.43, amplitude: 0.18 });
+        }
+      }
+
+      [internode.a, internode.b].forEach((t) => {
+        const center = axonCurve.getPoint(t);
+        const tangent = axonCurve.getTangent(t).normalize();
+        const node = new THREE.Mesh(new THREE.TorusGeometry(0.205, 0.012, 8, 42), nodeMaterial.clone());
+        node.position.copy(center);
+        node.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
+        node.name = "node of Ranvier";
+        nodeGroup.add(this.registerInteractive(node, nodeInfo));
+        this.reactiveMeshes.push({ mesh: node, baseScale: node.scale.clone(), speed: 1.6, phase: t * 7, amplitude: 0.06 });
+      });
+    });
+
+    for (let pulseIndex = 0; pulseIndex < 5; pulseIndex += 1) {
+      const pulse = new THREE.Mesh(
+        new THREE.SphereGeometry(0.075, 18, 18),
+        new THREE.MeshBasicMaterial({ color: model.palette.signal || COLOR_MAP.signal, transparent: true, opacity: 0.92 }),
+      );
+      pulse.name = "animated action potential";
+      signalGroup.add(this.registerInteractive(pulse, impulseInfo));
+      this.signalPulses.push({ mesh: pulse, curve: axonCurve, phase: pulseIndex * 0.2, speed: 0.1 + pulseIndex * 0.01, damagedBand: [0.48, 0.7] });
+    }
+
+    const terminalPoint = axonCurve.getPoint(0.98);
+    for (let index = 0; index < 10; index += 1) {
+      const angle = (index / 10) * Math.PI * 2;
+      const bouton = new THREE.Mesh(
+        new THREE.SphereGeometry(0.13 + (index % 3) * 0.018, 16, 16),
+        createMaterial(model.palette.vesicle || COLOR_MAP.vesicle, { emissive: new THREE.Color("#0f3e49"), opacity: 0.86 }),
+      );
+      bouton.position.copy(terminalPoint).add(new THREE.Vector3(Math.cos(angle) * 0.36, Math.sin(index * 1.1) * 0.22, Math.sin(angle) * 0.36));
+      projectionGroup.add(this.registerInteractive(bouton, this.createComponentInfo(
+        "ms-synaptic-terminal",
+        "Synaptic terminal bouton",
+        "neuron",
+        "Axon terminal bouton containing vesicle-like packets. It represents output communication to the next neural target.",
+        ["neurotransmitter release", "terminal arbor", "vesicle pool"],
+      )));
+      this.floaters.push({ mesh: bouton, axis: "y", speed: 0.34 + index * 0.03, range: 0.02 });
+    }
+
+    this.createOligodendrocyte(gliaGroup, axonCurve, oligodendrocyteInfo);
+    this.createAstrocyte(gliaGroup, astrocyteInfo);
+    this.createActivatedMicroglia(immuneGroup, axonCurve, microgliaInfo);
+    this.createInflammatoryPlaque(damageGroup, axonCurve, plaqueInfo);
+
+    this.registerExplodable(membraneGroup, new THREE.Vector3(-0.7, 0.55, 0.25));
+    this.registerExplodable(processGroup, new THREE.Vector3(0.65, 0.12, 0.05));
+    this.registerExplodable(projectionGroup, new THREE.Vector3(1, 0.2, 0.3));
+    this.registerExplodable(myelinGroup, new THREE.Vector3(0.6, -0.2, -0.25));
+    this.registerExplodable(nodeGroup, new THREE.Vector3(0, 0.95, 0.1));
+    this.registerExplodable(gliaGroup, new THREE.Vector3(-0.2, -0.8, 0.45));
+    this.registerExplodable(immuneGroup, new THREE.Vector3(0.1, 0.65, 0.8));
+    this.registerExplodable(signalGroup, new THREE.Vector3(0.35, 0.35, 0));
+    this.registerExplodable(damageGroup, new THREE.Vector3(0.35, 0.45, 0.85));
+
+    return {
+      membraneGroup,
+      processGroup,
+      projectionGroup,
+      myelinGroup,
+      nodeGroup,
+      gliaGroup,
+      immuneGroup,
+      signalGroup,
+      damageGroup,
+      somaCenter: new THREE.Vector3(-0.08, 0.08, 0),
+      somaRadius: 1.28,
+      outerRadius: 11.2,
+      processCurves: [...dendriteCurves, axonCurve],
+      axonCurve,
+    };
+  }
+
+  createOligodendrocyte(group, axonCurve, info) {
+    const somaMaterial = createMaterial(COLOR_MAP.myelin, { emissive: new THREE.Color("#263d5b"), opacity: 0.82, transmission: 0.18 });
+    const processMaterial = new THREE.MeshStandardMaterial({ color: "#cfeaff", emissive: "#1d3551", transparent: true, opacity: 0.78, roughness: 0.36 });
+    const soma = new THREE.Mesh(new THREE.IcosahedronGeometry(0.48, 12), somaMaterial);
+    soma.scale.set(1.12, 0.88, 1.02);
+    soma.position.set(4.45, -1.6, -1.35);
+    soma.name = "oligodendrocyte soma";
+    group.add(this.registerInteractive(soma, info));
+
+    [0.28, 0.39, 0.75, 0.86].forEach((t, index) => {
+      const target = axonCurve.getPoint(t);
+      const curve = new THREE.CatmullRomCurve3([
+        soma.position.clone(),
+        soma.position.clone().lerp(target, 0.45).add(new THREE.Vector3(0.15 * index, 0.38, -0.18)),
+        target,
+      ]);
+      const wrapProcess = this.createGroup(`oligodendrocyte-process-${index + 1}`);
+      addCurveTubes(wrapProcess, [curve], processMaterial, 0.035, 52, 8);
+      group.add(this.registerInteractive(wrapProcess, info));
+    });
+  }
+
+  createAstrocyte(group, info) {
+    const material = createMaterial(COLOR_MAP.astrocyte, { emissive: new THREE.Color("#17324a"), opacity: 0.72, transmission: 0.12 });
+    const soma = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 10), material);
+    soma.position.set(-1.95, -1.58, 1.9);
+    soma.name = "reactive astrocyte soma";
+    group.add(this.registerInteractive(soma, info));
+    for (let index = 0; index < 14; index += 1) {
+      const angle = (index / 14) * Math.PI * 2;
+      const reach = 0.9 + (index % 4) * 0.18;
+      const start = soma.position.clone();
+      const end = start.clone().add(new THREE.Vector3(Math.cos(angle) * reach, Math.sin(index * 1.31) * 0.72, Math.sin(angle) * reach));
+      const curve = new THREE.CatmullRomCurve3([
+        start,
+        start.clone().lerp(end, 0.52).add(new THREE.Vector3(0, Math.cos(index) * 0.2, 0)),
+        end,
+      ]);
+      const process = this.createGroup(`astrocyte-process-${index + 1}`);
+      addCurveTubes(process, [curve], material, 0.03, 36, 8);
+      group.add(this.registerInteractive(process, info));
+    }
+  }
+
+  createActivatedMicroglia(group, axonCurve, info) {
+    const bodyMaterial = createMaterial(COLOR_MAP.microglia, { emissive: new THREE.Color("#163f1b"), opacity: 0.88, transmission: 0.08 });
+    const processMaterial = new THREE.MeshStandardMaterial({ color: COLOR_MAP.microglia, emissive: "#123a16", transparent: true, opacity: 0.76 });
+    const soma = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 8), bodyMaterial);
+    soma.scale.set(1.35, 0.86, 1.0);
+    soma.position.copy(axonCurve.getPoint(0.61)).add(new THREE.Vector3(0.25, 0.72, 1.05));
+    soma.name = "activated microglia soma";
+    group.add(this.registerInteractive(soma, info));
+    for (let index = 0; index < 11; index += 1) {
+      const angle = (index / 11) * Math.PI * 2;
+      const target = axonCurve.getPoint(0.52 + (index % 4) * 0.055).add(new THREE.Vector3(Math.cos(angle) * 0.16, Math.sin(index) * 0.1, Math.sin(angle) * 0.16));
+      const curve = new THREE.CatmullRomCurve3([
+        soma.position.clone(),
+        soma.position.clone().lerp(target, 0.5).add(new THREE.Vector3(Math.sin(angle) * 0.18, Math.cos(index) * 0.18, Math.cos(angle) * 0.18)),
+        target,
+      ]);
+      const process = this.createGroup(`microglia-process-${index + 1}`);
+      addCurveTubes(process, [curve], processMaterial, 0.024, 34, 7);
+      group.add(this.registerInteractive(process, info));
+    }
+    this.reactiveMeshes.push({ mesh: soma, baseScale: soma.scale.clone(), speed: 1.1, phase: 0.2, amplitude: 0.12 });
+  }
+
+  createInflammatoryPlaque(group, axonCurve, info) {
+    const cloudMaterial = new THREE.MeshBasicMaterial({ color: COLOR_MAP.inflammatory, transparent: true, opacity: 0.095, depthWrite: false });
+    const center = axonCurve.getPoint(0.6);
+    const cloud = new THREE.Mesh(new THREE.SphereGeometry(1.12, 26, 26), cloudMaterial);
+    cloud.scale.set(1.35, 0.82, 1.0);
+    cloud.position.copy(center).add(new THREE.Vector3(0.2, 0.25, 0.32));
+    cloud.name = "inflammatory lesion field";
+    group.add(this.registerInteractive(cloud, info));
+
+    const particleMaterial = new THREE.MeshBasicMaterial({ color: COLOR_MAP.inflammatory, transparent: true, opacity: 0.72 });
+    for (let index = 0; index < 36; index += 1) {
+      const particle = new THREE.Mesh(new THREE.SphereGeometry(0.025 + (index % 4) * 0.008, 8, 8), particleMaterial.clone());
+      const angle = index * 2.399;
+      const radius = 0.18 + (index % 9) * 0.095;
+      particle.position.copy(center).add(new THREE.Vector3(Math.cos(angle) * radius, Math.sin(index * 0.7) * 0.38, Math.sin(angle) * radius));
+      group.add(this.registerInteractive(particle, info));
+      this.reactiveMeshes.push({ mesh: particle, baseScale: particle.scale.clone(), speed: 0.65 + index * 0.015, phase: index * 0.27, amplitude: 0.35 });
+    }
+  }
+
+  buildGliaMorphology(model) {
+    const generic = this.buildGenericMorphology(model);
+    generic.membraneGroup.scale.set(1.04, 0.96, 1.04);
+    const material = createMaterial(model.palette.membrane, {
+      emissive: new THREE.Color(model.palette.membraneGlow),
+      transmission: 0.28,
+      opacity: 0.9,
+    });
+    const branches = [];
+    for (let index = 0; index < 10; index += 1) {
+      const angle = (index / 10) * Math.PI * 2;
+      const curve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(Math.cos(angle) * 0.8, (Math.random() - 0.5) * 0.6, Math.sin(angle) * 0.8),
+        new THREE.Vector3(Math.cos(angle) * 1.7, (Math.random() - 0.5) * 1.2, Math.sin(angle) * 1.7),
+        new THREE.Vector3(Math.cos(angle) * 2.6, (Math.random() - 0.5) * 1.8, Math.sin(angle) * 2.6),
+      ]);
+      branches.push(curve);
+    }
+    addCurveTubes(generic.processGroup, branches, material, 0.07, 64, 10);
+    this.registerExplodable(generic.processGroup, new THREE.Vector3(0.4, 1, 0.3));
+    return generic;
+  }
+
   buildHepatocyteMorphology(model) {
-    const base = this.buildGenericMorphology(model);
-    base.somaRadii = new THREE.Vector3(2.2, 1.7, 1.95);
-    base.somaRadius = 2.05;
-    const geometry = new THREE.SphereGeometry(1, 28, 28);
-    geometry.scale(base.somaRadii.x, base.somaRadii.y, base.somaRadii.z);
-    deformSphere(geometry, 1.9, { scaleX: 2.8, scaleY: 2.2, scaleZ: 2.4, amplitude: 0.12 });
-    base.membraneGroup.clear();
+    const membraneGroup = this.createGroup("membrane");
+    const processGroup = this.createGroup("processes");
+    const projectionGroup = this.createGroup("projections");
+
+    const geometry = new THREE.IcosahedronGeometry(1.9, 18);
+    deformSphere(geometry, 1.9, { scaleX: 2.5, scaleY: 2.7, scaleZ: 2.4, amplitude: 0.1 });
+    geometry.scale(1.24, 1.0, 1.15);
     const shell = new THREE.Mesh(
       geometry,
       createMaterial(model.palette.membrane, {
         emissive: new THREE.Color(model.palette.membraneGlow),
-        transmission: 0.22,
+        transmission: 0.26,
+        clearcoat: 0.8,
       }),
     );
-    base.membraneGroup.add(shell);
-    this.setObjectLayer(
-      base.membraneGroup,
-      this.buildAnnotation({
-        category: "Hepatocyte shell",
-        title: "Polyhedral hepatocyte body",
-        description:
-          "The body is flattened and polygonal rather than spherical, with canalicular grooves and a denser central cytoplasm.",
-        tags: ["hepatocyte", "bile canaliculus", "parenchyma"],
-      }),
-      [shell],
-    );
+    membraneGroup.add(shell);
+
+    const grooveMaterial = new THREE.MeshStandardMaterial({
+      color: model.palette.cytoskeleton,
+      emissive: "#1d2848",
+      transparent: true,
+      opacity: 0.6,
+    });
+
     for (let index = 0; index < 4; index += 1) {
       const groove = new THREE.Mesh(
-        new THREE.TorusGeometry(0.95 + index * 0.07, 0.032, 10, 48, Math.PI * 0.95),
-        new THREE.MeshBasicMaterial({
-          color: model.palette.cytoskeleton,
-          transparent: true,
-          opacity: 0.42,
+        new THREE.TorusGeometry(1.05 + index * 0.08, 0.045, 10, 48, Math.PI * 0.95),
+        grooveMaterial,
+      );
+      groove.rotation.set(0.2 + index * 0.28, 0.9 - index * 0.12, 0.4 + index * 0.1);
+      groove.position.set(0.3 - index * 0.08, -0.15 + index * 0.12, -0.2 + index * 0.12);
+      projectionGroup.add(groove);
+    }
+
+    for (let index = 0; index < 60; index += 1) {
+      const spike = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.018, 0.09 + Math.random() * 0.08, 4, 8),
+        createMaterial(model.palette.vesicle, {
+          emissive: new THREE.Color("#183948"),
+          opacity: 0.78,
         }),
       );
-      groove.rotation.set(0.25 + index * 0.18, 0.8 - index * 0.12, 0.3 + index * 0.08);
-      groove.position.set(0.18 - index * 0.05, -0.1 + index * 0.08, -0.15 + index * 0.08);
-      base.projectionGroup.add(groove);
+      const side = index % 2 === 0 ? -1 : 1;
+      spike.position.set(
+        side * (1.2 + Math.random() * 0.25),
+        (Math.random() - 0.5) * 1.7,
+        (Math.random() - 0.5) * 1.2,
+      );
+      spike.rotation.z = Math.PI / 2;
+      spike.rotation.y = (Math.random() - 0.5) * 0.8;
+      processGroup.add(spike);
     }
-    base.outerRadius = 2.5;
-    return base;
+
+    this.registerExplodable(membraneGroup, new THREE.Vector3(0.6, 0.5, 0.2));
+    this.registerExplodable(processGroup, new THREE.Vector3(-0.9, 0.2, 0.1));
+    this.registerExplodable(projectionGroup, new THREE.Vector3(0, -1, 0.3));
+
+    return {
+      membraneGroup,
+      processGroup,
+      projectionGroup,
+      somaCenter: new THREE.Vector3(0, 0, 0),
+      somaRadius: 1.9,
+      outerRadius: 2.5,
+      shell,
+    };
   }
 
   buildImmuneMorphology(model) {
-    const base = this.buildGenericMorphology(model);
-    base.somaRadii = new THREE.Vector3(1.65, 1.58, 1.62);
-    base.somaRadius = 1.62;
-    base.outerRadius = 1.95;
+    const membraneGroup = this.createGroup("membrane");
+    const processGroup = this.createGroup("processes");
+    const projectionGroup = this.createGroup("projections");
+
+    const bodyGeometry = new THREE.IcosahedronGeometry(1.68, 20);
+    deformSphere(bodyGeometry, 1.68, { scaleX: 4.2, scaleY: 4.4, scaleZ: 4.1, amplitude: 0.05 });
+    bodyGeometry.scale(1.02, 1.0, 1.02);
+    const body = new THREE.Mesh(
+      bodyGeometry,
+      createMaterial(model.palette.membrane, {
+        emissive: new THREE.Color(model.palette.membraneGlow),
+        transmission: 0.34,
+        thickness: 0.35,
+      }),
+    );
+    membraneGroup.add(body);
+
     const spikeMaterial = createMaterial(model.palette.membrane, {
       emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.08,
-      opacity: 0.8,
+      transmission: 0.12,
+      opacity: 0.84,
     });
-    for (let index = 0; index < 80; index += 1) {
-      const spike = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.01, 0.03, 0.16 + Math.random() * 0.08, 6),
-        spikeMaterial,
-      );
+
+    for (let index = 0; index < 140; index += 1) {
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
       const normal = new THREE.Vector3(
@@ -776,102 +1165,133 @@ export class CellScene {
         Math.cos(phi),
         Math.sin(phi) * Math.sin(theta),
       );
-      if (normal.x > 0.75) {
+      if (normal.x > 0.78) {
         continue;
       }
-      spike.position.copy(normal.clone().multiply(new THREE.Vector3(base.somaRadii.x, base.somaRadii.y, base.somaRadii.z)));
-      spike.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-      this.attachAnnotation(
-        spike,
-        this.buildAnnotation({
-          category: "Immune surface",
-          title: "Microvillus scanning protrusion",
-          description:
-            "These surface protrusions suggest receptor-rich immune scanning and synapse formation behavior.",
-          tags: ["microvillus", "immune", "surface receptor"],
-        }),
+      const spike = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.012, 0.038, 0.22 + Math.random() * 0.22, 7),
+        spikeMaterial,
       );
-      base.processGroup.add(spike);
+      spike.position.copy(normal.clone().multiplyScalar(1.7 + Math.random() * 0.1));
+      spike.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+      processGroup.add(spike);
     }
-    return base;
+
+    const synapsePatch = new THREE.Mesh(
+      new THREE.CircleGeometry(0.8, 48),
+      new THREE.MeshBasicMaterial({
+        color: model.palette.vesicle,
+        transparent: true,
+        opacity: 0.26,
+        side: THREE.DoubleSide,
+      }),
+    );
+    synapsePatch.rotation.y = Math.PI / 2;
+    synapsePatch.position.set(1.54, 0, 0);
+    projectionGroup.add(synapsePatch);
+
+    this.registerExplodable(membraneGroup, new THREE.Vector3(0.3, 1, 0.2));
+    this.registerExplodable(processGroup, new THREE.Vector3(-0.6, 0.4, 0.1));
+    this.registerExplodable(projectionGroup, new THREE.Vector3(1, 0, 0));
+
+    return {
+      membraneGroup,
+      processGroup,
+      projectionGroup,
+      somaCenter: new THREE.Vector3(0, 0, 0),
+      somaRadius: 1.68,
+      outerRadius: 1.95,
+      shell: body,
+    };
   }
 
   buildEpithelialMorphology(model) {
-    const base = this.buildGenericMorphology(model);
-    base.somaRadii = new THREE.Vector3(1.65, 2.0, 1.5);
-    base.somaRadius = 1.85;
-    base.outerRadius = 2.25;
-    for (let index = 0; index < 52; index += 1) {
+    const membraneGroup = this.createGroup("membrane");
+    const processGroup = this.createGroup("processes");
+    const projectionGroup = this.createGroup("projections");
+    const geometry = new THREE.IcosahedronGeometry(1.78, 18);
+    deformSphere(geometry, 1.78, { scaleX: 3.3, scaleY: 2.1, scaleZ: 2.8, amplitude: 0.05 });
+    geometry.scale(1.05, 1.22, 0.96);
+    const body = new THREE.Mesh(
+      geometry,
+      createMaterial(model.palette.membrane, {
+        emissive: new THREE.Color(model.palette.membraneGlow),
+        transmission: 0.28,
+      }),
+    );
+    membraneGroup.add(body);
+
+    for (let index = 0; index < 80; index += 1) {
       const projection = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.014, 0.08 + Math.random() * 0.04, 4, 8),
+        new THREE.CapsuleGeometry(0.016, 0.1 + Math.random() * 0.06, 4, 8),
         createMaterial(model.palette.vesicle, {
           emissive: new THREE.Color("#173848"),
-          opacity: 0.78,
+          opacity: 0.82,
         }),
       );
       projection.position.set(
-        (Math.random() - 0.5) * 1.5,
-        base.somaRadii.y * 0.85 + Math.random() * 0.18,
-        (Math.random() - 0.5) * 1.1,
+        (Math.random() - 0.5) * 1.6,
+        1.2 + Math.random() * 0.18,
+        (Math.random() - 0.5) * 1.2,
       );
       projection.rotation.x = Math.PI / 2;
-      base.processGroup.add(projection);
+      processGroup.add(projection);
     }
-    return base;
+
+    this.registerExplodable(membraneGroup, new THREE.Vector3(0, 1, 0.2));
+    this.registerExplodable(processGroup, new THREE.Vector3(0, 1, 0));
+
+    return {
+      membraneGroup,
+      processGroup,
+      projectionGroup,
+      somaCenter: new THREE.Vector3(0, 0, 0),
+      somaRadius: 1.78,
+      outerRadius: 2.1,
+      shell: body,
+    };
   }
 
   buildMuscleMorphology(model) {
     const membraneGroup = this.createGroup("membrane");
     const processGroup = this.createGroup("processes");
     const projectionGroup = this.createGroup("projections");
-    const pathwayGroup = this.createGroup("pathways");
-    const geometry = new THREE.CapsuleGeometry(1.0, 3.4, 14, 24);
+    const geometry = new THREE.CapsuleGeometry(1.1, 3.8, 12, 24);
     geometry.rotateZ(Math.PI / 2);
-    const shell = new THREE.Mesh(
+    const body = new THREE.Mesh(
       geometry,
       createMaterial(model.palette.membrane, {
         emissive: new THREE.Color(model.palette.membraneGlow),
-        transmission: 0.18,
+        transmission: 0.22,
       }),
     );
-    membraneGroup.add(shell);
-    this.setObjectLayer(
-      membraneGroup,
-      this.buildAnnotation({
-        category: "Contractile membrane",
-        title: "Cardiomyocyte body",
-        description:
-          "The contractile cell is elongated and banded, with organized energetic lanes and aligned internal architecture.",
-        tags: ["cardiomyocyte", "contractile", "sarcomeric"],
-      }),
-      [shell],
-    );
+    membraneGroup.add(body);
+
     for (let index = 0; index < 18; index += 1) {
       const band = new THREE.Mesh(
-        new THREE.TorusGeometry(0.86, 0.018, 8, 42),
+        new THREE.TorusGeometry(0.9, 0.02, 8, 42),
         new THREE.MeshBasicMaterial({
           color: model.palette.cytoskeleton,
           transparent: true,
-          opacity: 0.38,
+          opacity: 0.44,
         }),
       );
       band.rotation.y = Math.PI / 2;
-      band.position.x = -1.75 + index * 0.21;
+      band.position.x = -1.8 + index * 0.22;
       projectionGroup.add(band);
     }
+
     this.registerExplodable(membraneGroup, new THREE.Vector3(1, 0.2, 0));
+    this.registerExplodable(projectionGroup, new THREE.Vector3(0, 1, 0));
+
     return {
       membraneGroup,
       processGroup,
       projectionGroup,
-      pathwayGroup,
-      shell,
       somaCenter: new THREE.Vector3(0, 0, 0),
-      somaRadii: new THREE.Vector3(2.7, 1.0, 1.0),
       somaRadius: 2.4,
       outerRadius: 2.8,
-      processCurves: [],
-      axonCurves: [],
+      shell: body,
     };
   }
 
@@ -879,8 +1299,8 @@ export class CellScene {
     const base = this.buildGenericMorphology(model);
     const armMaterial = createMaterial(model.palette.membrane, {
       emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.12,
-      opacity: 0.84,
+      transmission: 0.18,
+      opacity: 0.86,
     });
     const arms = [
       new THREE.CatmullRomCurve3([
@@ -900,67 +1320,55 @@ export class CellScene {
       ]),
     ];
     addCurveTubes(base.processGroup, arms, armMaterial, 0.08, 72, 10);
-    this.setObjectLayer(
-      base.processGroup,
-      this.buildAnnotation({
-        category: "Dendritic process",
-        title: "Melanocyte transfer arm",
-        description:
-          "Melanocyte dendritic processes extend outward to transfer pigment-containing packets toward neighboring cells.",
-        tags: ["melanocyte", "dendrite", "pigment transfer"],
-      }),
-    );
-    base.outerRadius = 3.2;
+    this.registerExplodable(base.processGroup, new THREE.Vector3(-0.6, 0.6, 0.2));
     return base;
   }
 
   buildOocyteMorphology(model) {
     const base = this.buildGenericMorphology(model);
-    base.somaRadii = new THREE.Vector3(2.6, 2.45, 2.58);
-    base.somaRadius = 2.55;
-    base.outerRadius = 2.9;
+    base.membraneGroup.scale.set(1.15, 1.15, 1.15);
+    for (let index = 0; index < 110; index += 1) {
+      const granule = new THREE.Mesh(
+        new THREE.SphereGeometry(0.03 + Math.random() * 0.04, 10, 10),
+        createMaterial(model.palette.vesicle, {
+          emissive: new THREE.Color("#173849"),
+          opacity: 0.85,
+        }),
+      );
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const radius = 1.2 + Math.random() * 0.42;
+      granule.position.set(
+        radius * Math.sin(phi) * Math.cos(theta),
+        radius * Math.cos(phi),
+        radius * Math.sin(phi) * Math.sin(theta),
+      );
+      base.processGroup.add(granule);
+    }
+    this.registerExplodable(base.processGroup, new THREE.Vector3(0.2, -1, 0.4));
     return base;
   }
 
   buildEmbryonicMorphology(model) {
     const base = this.buildGenericMorphology(model);
-    for (let index = 0; index < 7; index += 1) {
+    for (let index = 0; index < 8; index += 1) {
       const bleb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.14 + Math.random() * 0.06, 14, 14),
+        new THREE.SphereGeometry(0.16 + Math.random() * 0.08, 14, 14),
         createMaterial(model.palette.membrane, {
           emissive: new THREE.Color(model.palette.membraneGlow),
-          transmission: 0.18,
-          opacity: 0.76,
+          transmission: 0.25,
+          opacity: 0.78,
         }),
       );
-      const direction = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-      bleb.position.copy(direction.multiplyScalar(base.somaRadius * 0.92));
+      bleb.position.set(
+        (Math.random() - 0.5) * 2.6,
+        (Math.random() - 0.5) * 2.3,
+        (Math.random() - 0.5) * 2.6,
+      );
       base.processGroup.add(bleb);
-      this.floaters.push({ mesh: bleb, axis: "x", speed: 0.16 + index * 0.05, range: 0.012 });
+      this.floaters.push({ mesh: bleb, axis: "x", speed: 0.4 + index * 0.07, range: 0.018 });
     }
-    return base;
-  }
-
-  buildFallbackNeuronMorphology(model) {
-    return this.buildMelanocyteMorphology(model);
-  }
-
-  buildFallbackGliaMorphology(model) {
-    const base = this.buildGenericMorphology(model);
-    const branches = Array.from({ length: 8 }, (_, index) => {
-      const angle = (index / 8) * Math.PI * 2;
-      return new THREE.CatmullRomCurve3([
-        new THREE.Vector3(Math.cos(angle) * 0.5, (Math.random() - 0.5) * 0.3, Math.sin(angle) * 0.5),
-        new THREE.Vector3(Math.cos(angle) * 1.4, (Math.random() - 0.5) * 0.8, Math.sin(angle) * 1.4),
-        new THREE.Vector3(Math.cos(angle) * 2.3, (Math.random() - 0.5) * 1.2, Math.sin(angle) * 2.3),
-      ]);
-    });
-    addCurveTubes(base.processGroup, branches, createMaterial(model.palette.membrane, {
-      emissive: new THREE.Color(model.palette.membraneGlow),
-      transmission: 0.1,
-      opacity: 0.8,
-    }), 0.05, 64, 8);
-    base.outerRadius = 2.6;
+    this.registerExplodable(base.processGroup, new THREE.Vector3(0.5, 0.8, 0.2));
     return base;
   }
 
@@ -973,6 +1381,64 @@ export class CellScene {
     const lysosomeGroup = this.createLysosomes(model, morphology, profile);
     const cytoskeletonGroup = this.createCytoskeleton(model, morphology, profile);
     const ribosomeGroup = this.createRibosomes(model, morphology, profile);
+
+    this.registerInteractive(nucleusGroup, this.createComponentInfo(
+      "organelle-nucleus",
+      "Nucleus and nucleolus",
+      "organelle",
+      "Transcriptional control center containing chromatin, nuclear envelope pores, and the nucleolus. In the MS neuron scene this remains inside the soma.",
+      ["chromatin", "nucleolus", "nuclear pores"],
+    ));
+    this.registerInteractive(golgiGroup, this.createComponentInfo(
+      "organelle-golgi",
+      "Golgi apparatus",
+      "organelle",
+      "Layered sorting and dispatch ribbon that processes membrane and secreted cargo before delivery to vesicles and neurites.",
+      ["cargo sorting", "secretory traffic", "perinuclear ribbon"],
+    ));
+    this.registerInteractive(reticulumGroup, this.createComponentInfo(
+      "organelle-reticulum",
+      "Endoplasmic reticulum",
+      "organelle",
+      "Reticular processing network for protein folding, lipid handling, calcium buffering, and stress-linked signaling.",
+      ["rough ER", "smooth ER", "proteostasis"],
+    ));
+    this.registerInteractive(mitoGroup, this.createComponentInfo(
+      "organelle-mitochondria",
+      "Mitochondria",
+      "organelle",
+      "ATP-producing organelles distributed inside the soma and along neurites to support membrane excitability, transport, and repair pressure.",
+      ["ATP reserve", "axon energy", "oxidative phosphorylation"],
+    ));
+    this.registerInteractive(vesicleGroup, this.createComponentInfo(
+      "organelle-vesicles",
+      "Vesicles",
+      "organelle",
+      "Small trafficking packets for cargo movement, synaptic delivery, and local membrane remodeling.",
+      ["cargo transport", "synaptic packets", "membrane traffic"],
+    ));
+    this.registerInteractive(lysosomeGroup, this.createComponentInfo(
+      "organelle-lysosomes",
+      "Lysosomes",
+      "organelle",
+      "Recycling and degradation nodes involved in turnover, autophagy, and debris-processing pressure.",
+      ["autophagy", "degradation", "recycling"],
+    ));
+    this.registerInteractive(cytoskeletonGroup, this.createComponentInfo(
+      "organelle-cytoskeleton",
+      "Cytoskeleton",
+      "organelle",
+      "Filament scaffold that organizes shape, polarity, mechanical stress, and long-distance intracellular transport.",
+      ["microtubules", "actin", "transport tracks"],
+    ));
+    this.registerInteractive(ribosomeGroup, this.createComponentInfo(
+      "organelle-ribosomes",
+      "Ribosomes",
+      "organelle",
+      "Protein synthesis particles distributed through the cytoplasm and reticular regions.",
+      ["translation", "protein synthesis", "Nissl-like density"],
+    ));
+
     return {
       nucleusGroup,
       golgiGroup,
@@ -988,34 +1454,46 @@ export class CellScene {
   createNucleus(model, morphology, profile) {
     const nucleusGroup = this.createGroup("nucleus");
     const offsetMap = {
-      neuron: new THREE.Vector3(-0.12, 0.08, 0),
-      glia: new THREE.Vector3(-0.02, 0.05, 0),
-      hepatocyte: new THREE.Vector3(0.12, 0.03, 0),
-      immune: new THREE.Vector3(-0.05, 0.02, 0),
+      neuron: new THREE.Vector3(-0.18, 0.12, 0),
+      msNeuron: new THREE.Vector3(-0.16, 0.12, 0),
+      glia: new THREE.Vector3(-0.05, 0.06, 0),
+      hepatocyte: new THREE.Vector3(0.1, 0.06, 0),
+      immune: new THREE.Vector3(-0.1, 0.02, 0),
       muscle: new THREE.Vector3(-0.8, 0, 0),
-      epithelial: new THREE.Vector3(0, -0.18, 0),
-      generic: new THREE.Vector3(-0.05, 0.04, 0),
+      melanocyte: new THREE.Vector3(-0.08, 0.08, 0),
+      epithelial: new THREE.Vector3(0, -0.1, 0),
+      oocyte: new THREE.Vector3(-0.25, 0.2, 0.15),
+      embryonic: new THREE.Vector3(0, 0.05, 0),
+      generic: new THREE.Vector3(-0.12, 0.08, 0),
     };
+
     const radiusFactor = {
-      neuron: 0.44,
-      glia: 0.42,
+      neuron: 0.48,
+      msNeuron: 0.48,
+      immune: 0.58,
       hepatocyte: 0.42,
-      immune: 0.56,
-      muscle: 0.3,
-      epithelial: 0.38,
-      generic: 0.42,
+      muscle: 0.34,
+      glia: 0.46,
+      epithelial: 0.4,
+      melanocyte: 0.43,
+      oocyte: 0.44,
+      embryonic: 0.4,
+      generic: 0.44,
     };
-    const radius = morphology.somaRadius * (radiusFactor[profile.family] || radiusFactor.generic);
+
+    const radius = morphology.somaRadius * (radiusFactor[profile.family] || 0.44);
     const core = new THREE.Mesh(
       new THREE.SphereGeometry(radius, 28, 28),
       createMaterial(model.palette.nucleus || COLOR_MAP.nucleus, {
         emissive: new THREE.Color("#2c163f"),
         roughness: 0.28,
-        transmission: 0.18,
+        transmission: 0.22,
       }),
     );
     core.position.copy(morphology.somaCenter).add(offsetMap[profile.family] || offsetMap.generic);
     core.scale.set(1.0, 0.94, 1.04);
+    nucleusGroup.add(core);
+
     const nucleolus = new THREE.Mesh(
       new THREE.SphereGeometry(radius * 0.28, 18, 18),
       new THREE.MeshStandardMaterial({
@@ -1024,19 +1502,39 @@ export class CellScene {
       }),
     );
     nucleolus.position.copy(core.position).add(new THREE.Vector3(radius * 0.24, -radius * 0.12, radius * 0.16));
-    nucleusGroup.add(core, nucleolus);
-    this.setObjectLayer(
-      nucleusGroup,
-      this.buildAnnotation({
-        category: "Organelle",
-        title: "Nucleus",
-        description:
-          "The nucleus stays inside the soma and anchors gene-expression state, chromatin regulation, and stress-response programs.",
-        tags: ["nucleus", "transcription", "chromatin"],
+    nucleusGroup.add(nucleolus);
+
+    const envelope = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.04, 32, 32),
+      new THREE.MeshPhysicalMaterial({
+        color: model.palette.nucleus || COLOR_MAP.nucleus,
+        emissive: "#211337",
+        transparent: true,
+        opacity: 0.18,
+        roughness: 0.18,
+        clearcoat: 0.6,
+        depthWrite: false,
       }),
-      [core, nucleolus],
     );
-    this.floaters.push({ mesh: nucleusGroup, axis: "y", speed: 0.18, range: 0.012 });
+    envelope.position.copy(core.position);
+    envelope.scale.copy(core.scale);
+    nucleusGroup.add(envelope);
+
+    for (let index = 0; index < 18; index += 1) {
+      const theta = (index / 18) * Math.PI * 2;
+      const y = Math.sin(index * 1.7) * radius * 0.55;
+      const poreRadius = Math.sqrt(Math.max(radius * radius * 0.82 - y * y, radius * radius * 0.2));
+      const normal = new THREE.Vector3(Math.cos(theta), y / radius, Math.sin(theta)).normalize();
+      const pore = new THREE.Mesh(
+        new THREE.TorusGeometry(radius * 0.045, radius * 0.007, 6, 18),
+        new THREE.MeshBasicMaterial({ color: "#fff0ff", transparent: true, opacity: 0.72 }),
+      );
+      pore.position.copy(core.position).add(new THREE.Vector3(Math.cos(theta) * poreRadius, y, Math.sin(theta) * poreRadius));
+      pore.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+      nucleusGroup.add(pore);
+    }
+
+    this.floaters.push({ mesh: nucleusGroup, axis: "y", speed: 0.26, range: 0.018 });
     this.registerExplodable(nucleusGroup, new THREE.Vector3(0, 1, 0.1));
     return nucleusGroup;
   }
@@ -1048,30 +1546,33 @@ export class CellScene {
       emissive: "#4f3208",
       roughness: 0.26,
     });
+
     const stackCount = profile.family === "hepatocyte" ? 8 : 6;
-    const created = [];
     for (let index = 0; index < stackCount; index += 1) {
-      const mesh = new THREE.Mesh(
-        new THREE.TorusGeometry(0.42 - index * 0.032, 0.024, 12, 84, Math.PI * 1.22),
-        material,
-      );
-      mesh.scale.set(1.05, 0.54, 1.0);
-      mesh.position.copy(morphology.somaCenter).add(new THREE.Vector3(0.42, -0.18 + index * 0.055, -0.12 + index * 0.015));
-      mesh.rotation.set(Math.PI / 2.38, 0.8, 0.12);
+      const geo = new THREE.TorusGeometry(0.56 - index * 0.05, 0.028, 12, 84, Math.PI * 1.25);
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.scale.set(1.1, 0.54, 1.0);
+      mesh.position.copy(morphology.somaCenter).add(new THREE.Vector3(0.65, -0.3 + index * 0.07, -0.18 + index * 0.02));
+      mesh.rotation.set(Math.PI / 2.45, 0.8, 0.12);
       golgiGroup.add(mesh);
-      created.push(mesh);
     }
-    this.setObjectLayer(
-      golgiGroup,
-      this.buildAnnotation({
-        category: "Organelle",
-        title: "Golgi cisternal stack",
-        description:
-          "The Golgi is modeled as flattened curved cisternae clustered perinuclearly rather than as a free-floating torus.",
-        tags: ["Golgi", "cisternae", "cargo sorting"],
-      }),
-      created,
-    );
+
+    for (let index = 0; index < 18; index += 1) {
+      const bud = new THREE.Mesh(
+        new THREE.SphereGeometry(0.04 + Math.random() * 0.02, 12, 12),
+        new THREE.MeshStandardMaterial({
+          color: model.palette.vesicle || COLOR_MAP.vesicle,
+          emissive: "#153947",
+          transparent: true,
+          opacity: 0.85,
+        }),
+      );
+      bud.position.copy(morphology.somaCenter).add(
+        new THREE.Vector3(0.42 + Math.random() * 0.36, -0.12 + Math.random() * 0.42, -0.22 + Math.random() * 0.4),
+      );
+      golgiGroup.add(bud);
+    }
+
     this.registerExplodable(golgiGroup, new THREE.Vector3(1, -0.2, 0.4));
     return golgiGroup;
   }
@@ -1083,55 +1584,35 @@ export class CellScene {
       emissive: "#10362d",
       roughness: 0.48,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.86,
     });
-    const ringCount = profile.family === "hepatocyte" ? 14 : 8;
-    const created = [];
-    for (let index = 0; index < ringCount; index += 1) {
-      const points = [];
-      for (let step = 0; step < 11; step += 1) {
-        const t = (step / 10) * Math.PI * 2;
-        points.push(
+
+    const curveCount = profile.family === "hepatocyte" ? 16 : (profile.family === "neuron" || profile.family === "msNeuron") ? 10 : 8;
+    for (let index = 0; index < curveCount; index += 1) {
+      const ring = [];
+      for (let step = 0; step < 12; step += 1) {
+        const t = step / 11;
+        ring.push(
           morphology.somaCenter.clone().add(
             new THREE.Vector3(
-              Math.sin(t) * (morphology.somaRadii.x * (0.18 + index * 0.04)),
-              Math.cos(t * 1.2) * (morphology.somaRadii.y * (0.08 + index * 0.02)),
-              Math.cos(t) * (morphology.somaRadii.z * (0.18 + index * 0.04)),
+              Math.sin((t + index * 0.09) * Math.PI * 2) * (0.55 + index * 0.03),
+              (t - 0.5) * (0.65 + index * 0.02),
+              Math.cos((t + index * 0.11) * Math.PI * 2) * (0.52 + index * 0.03),
             ),
           ),
         );
       }
-      const curve = new THREE.CatmullRomCurve3(points);
-      const mesh = new THREE.Mesh(
-        new THREE.TubeGeometry(curve, 42, profile.family === "hepatocyte" ? 0.035 : 0.024, 8, false),
-        material,
-      );
-      reticulumGroup.add(mesh);
-      created.push(mesh);
+      addCurveTubes(reticulumGroup, [new THREE.CatmullRomCurve3(ring)], material, 0.03 + (profile.family === "hepatocyte" ? 0.01 : 0), 48, 10);
     }
-    if (morphology.processCurves.length > 0) {
-      morphology.processCurves.slice(0, 5).forEach((curve) => {
-        const samplePoints = curve.getPoints(8).slice(1, 6);
-        const branchCurve = new THREE.CatmullRomCurve3(samplePoints);
-        const mesh = new THREE.Mesh(
-          new THREE.TubeGeometry(branchCurve, 28, 0.014, 6, false),
-          material,
-        );
-        reticulumGroup.add(mesh);
-        created.push(mesh);
+
+    if ((profile.family === "neuron" || profile.family === "msNeuron") && morphology.processCurves) {
+      morphology.processCurves.slice(0, 2).forEach((curve) => {
+        const samplePoints = curve.getPoints(12).slice(1, 9);
+        const branchCurve = new THREE.CatmullRomCurve3(samplePoints.map((point, index) => point.clone().add(new THREE.Vector3(0, Math.sin(index) * 0.06, 0))));
+        addCurveTubes(reticulumGroup, [branchCurve], material, 0.02, 52, 8);
       });
     }
-    this.setObjectLayer(
-      reticulumGroup,
-      this.buildAnnotation({
-        category: "Organelle",
-        title: "Endoplasmic reticulum",
-        description:
-          "Reticular membranes remain packed inside the soma or cell body and only extend into major processes for neural cells.",
-        tags: ["ER", "translation", "protein folding"],
-      }),
-      created,
-    );
+
     this.registerExplodable(reticulumGroup, new THREE.Vector3(-0.6, 0.1, 0.8));
     return reticulumGroup;
   }
@@ -1143,70 +1624,64 @@ export class CellScene {
       emissive: "#431509",
       roughness: 0.35,
     });
-    const created = [];
 
-    const addBodyMito = (count) => {
-      for (let index = 0; index < count; index += 1) {
-        const mesh = new THREE.Mesh(
-          new THREE.CapsuleGeometry(0.06, 0.16 + Math.random() * 0.16, 8, 16),
-          material,
-        );
-        mesh.position.copy(this.sampleInsideEllipsoid(morphology.somaCenter, morphology.somaRadii, 0.18));
-        mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
-        mitoGroup.add(mesh);
-        created.push(mesh);
-      }
-    };
-
-    if (profile.family === "muscle") {
-      for (let index = 0; index < 40; index += 1) {
-        const mesh = new THREE.Mesh(
-          new THREE.CapsuleGeometry(0.05, 0.3, 8, 16),
-          material,
-        );
-        mesh.position.set(
-          -1.85 + (index % 14) * 0.26,
-          -0.58 + Math.floor(index / 14) * 0.54,
-          (Math.random() - 0.5) * 0.62,
-        );
-        mesh.rotation.z = Math.PI / 2;
-        mitoGroup.add(mesh);
-        created.push(mesh);
-      }
-    } else {
-      addBodyMito(Math.max(6, Math.round(model.components.mitochondria * 0.55)));
-    }
-
-    if (morphology.processCurves.length > 0) {
-      morphology.processCurves.slice(0, 10).forEach((curve, curveIndex) => {
+    if (profile.family === "neuron" || profile.family === "msNeuron" || profile.family === "melanocyte") {
+      const curves = morphology.processCurves || [];
+      curves.forEach((curve, curveIndex) => {
         const samples = curve.getPoints(10);
-        samples.slice(2, 7).forEach((point, pointIndex) => {
+        samples.slice(2, 8).forEach((point, pointIndex) => {
           if ((pointIndex + curveIndex) % 2 !== 0) {
             return;
           }
           const mesh = new THREE.Mesh(
-            new THREE.CapsuleGeometry(0.035, 0.16 + Math.random() * 0.12, 8, 14),
+            new THREE.CapsuleGeometry(0.05, 0.28 + Math.random() * 0.22, 8, 16),
             material,
           );
           mesh.position.copy(point);
           mesh.rotation.set(Math.random() * 0.4, Math.random() * Math.PI, Math.random() * 0.4);
           mitoGroup.add(mesh);
-          created.push(mesh);
         });
       });
     }
 
-    this.setObjectLayer(
-      mitoGroup,
-      this.buildAnnotation({
-        category: "Organelle",
-        title: "Mitochondrial network",
-        description:
-          "Mitochondria are constrained to the soma and major processes, with elongated neural mitochondria following dendritic and axonal shafts.",
-        tags: ["mitochondria", "ATP", "metabolism"],
-      }),
-      created,
-    );
+    const count = profile.family === "muscle" ? 42 : model.components.mitochondria;
+    for (let index = 0; index < count; index += 1) {
+      const radius = profile.family === "muscle" ? 0.08 : 0.09 + Math.random() * 0.05;
+      const length = profile.family === "muscle" ? 0.34 : 0.2 + Math.random() * 0.22;
+      const mesh = new THREE.Mesh(
+        new THREE.CapsuleGeometry(radius, length, 8, 16),
+        material,
+      );
+
+      if (profile.family === "muscle") {
+        mesh.position.set(
+          -1.9 + (index % 14) * 0.28,
+          -0.65 + Math.floor(index / 14) * 0.62,
+          (Math.random() - 0.5) * 0.8,
+        );
+        mesh.rotation.z = Math.PI / 2;
+      } else {
+        mesh.position.copy(organellePoint(morphology, profile, 1100 + index * 17, 0.82));
+        mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+      }
+
+      for (let ridgeIndex = 0; ridgeIndex < 3; ridgeIndex += 1) {
+        const crista = new THREE.Mesh(
+          new THREE.TorusGeometry(radius * 0.72, radius * 0.045, 6, 18),
+          new THREE.MeshBasicMaterial({
+            color: "#ffd0a8",
+            transparent: true,
+            opacity: 0.48,
+          }),
+        );
+        crista.rotation.x = Math.PI / 2;
+        crista.position.y = (-length * 0.34) + ridgeIndex * length * 0.34;
+        mesh.add(crista);
+      }
+      mitoGroup.add(mesh);
+      this.floaters.push({ mesh, axis: "x", speed: 0.12 + Math.random() * 0.2, range: 0.012 });
+    }
+
     this.registerExplodable(mitoGroup, new THREE.Vector3(-0.5, -0.3, 1));
     return mitoGroup;
   }
@@ -1219,62 +1694,38 @@ export class CellScene {
       transparent: true,
       opacity: 0.9,
     });
-    const created = [];
-    const count = profile.family === "neuron" ? Math.round(model.components.vesicles * 0.5) : model.components.vesicles;
+    const count = model.components.vesicles + (profile.family === "melanocyte" ? 12 : 0);
     for (let index = 0; index < count; index += 1) {
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.04 + Math.random() * 0.03, 14, 14),
+        new THREE.SphereGeometry(0.045 + Math.random() * 0.05, 14, 14),
         material,
       );
-      mesh.position.copy(this.sampleInsideEllipsoid(morphology.somaCenter, morphology.somaRadii, 0.16));
+      mesh.position.copy(organellePoint(morphology, profile, 2200 + index * 19, profile.family === "melanocyte" ? 0.9 : 0.78));
       vesicleGroup.add(mesh);
-      created.push(mesh);
-      this.floaters.push({ mesh, axis: "z", speed: 0.16 + Math.random() * 0.2, range: 0.01 });
+      this.floaters.push({ mesh, axis: "z", speed: 0.22 + Math.random() * 0.35, range: 0.015 });
     }
-    this.setObjectLayer(
-      vesicleGroup,
-      this.buildAnnotation({
-        category: "Organelle",
-        title: "Transport vesicles",
-        description:
-          "Transport vesicles are kept within the cytoplasm, or concentrated near synapses in neurons, to reflect realistic trafficking compartments.",
-        tags: ["vesicle", "trafficking", "secretion"],
-      }),
-      created,
-    );
+
     this.registerExplodable(vesicleGroup, new THREE.Vector3(0.2, 0.8, 0.9));
     return vesicleGroup;
   }
 
-  createLysosomes(model, morphology) {
+  createLysosomes(model, morphology, profile) {
     const lysosomeGroup = this.createGroup("lysosomes");
     const material = new THREE.MeshStandardMaterial({
       color: model.palette.lysosome || COLOR_MAP.lysosome,
       emissive: "#4d1432",
       roughness: 0.25,
     });
-    const created = [];
+
     for (let index = 0; index < model.components.lysosomes; index += 1) {
       const mesh = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(0.07 + Math.random() * 0.02, 1),
+        new THREE.IcosahedronGeometry(0.08 + Math.random() * 0.03, 1),
         material,
       );
-      mesh.position.copy(this.sampleInsideEllipsoid(morphology.somaCenter, morphology.somaRadii, 0.16));
+      mesh.position.copy(organellePoint(morphology, profile, 3300 + index * 23, 0.74));
       lysosomeGroup.add(mesh);
-      created.push(mesh);
-      this.floaters.push({ mesh, axis: "y", speed: 0.16 + Math.random() * 0.16, range: 0.01 });
+      this.floaters.push({ mesh, axis: "y", speed: 0.18 + Math.random() * 0.22, range: 0.012 });
     }
-    this.setObjectLayer(
-      lysosomeGroup,
-      this.buildAnnotation({
-        category: "Organelle",
-        title: "Lysosomal compartment",
-        description:
-          "Lysosomes are clustered inside the soma or cell body where degradation and recycling are concentrated.",
-        tags: ["lysosome", "recycling", "autophagy"],
-      }),
-      created,
-    );
     this.registerExplodable(lysosomeGroup, new THREE.Vector3(-0.8, 0.4, -0.2));
     return lysosomeGroup;
   }
@@ -1284,87 +1735,61 @@ export class CellScene {
     const material = new THREE.MeshBasicMaterial({
       color: model.palette.cytoskeleton || COLOR_MAP.cytoskeleton,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.5,
     });
-    const created = [];
 
     if (profile.family === "muscle") {
-      for (let index = 0; index < 20; index += 1) {
+      for (let index = 0; index < 22; index += 1) {
         const curve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(-2.1 + index * 0.2, -0.7, -0.58),
+          new THREE.Vector3(-2.2 + index * 0.2, -0.8, -0.65),
           new THREE.Vector3(-2.0 + index * 0.2, 0, 0),
-          new THREE.Vector3(-1.9 + index * 0.2, 0.7, 0.58),
+          new THREE.Vector3(-1.8 + index * 0.2, 0.8, 0.65),
         ]);
-        const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.014, 6, false), material);
-        cytoskeletonGroup.add(mesh);
-        created.push(mesh);
+        addCurveTubes(cytoskeletonGroup, [curve], material, 0.016, 28, 6);
       }
     } else {
-      const filaments = Math.max(10, Math.min(model.components.filaments, 28));
-      for (let index = 0; index < filaments; index += 1) {
-        const start = this.sampleInsideEllipsoid(morphology.somaCenter, morphology.somaRadii, 0.22);
-        const mid = this.sampleInsideEllipsoid(morphology.somaCenter, morphology.somaRadii, 0.22);
-        const end = this.sampleInsideEllipsoid(morphology.somaCenter, morphology.somaRadii, 0.22);
-        const curve = new THREE.CatmullRomCurve3([start, mid, end]);
-        const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 18, 0.012, 6, false), material);
-        cytoskeletonGroup.add(mesh);
-        created.push(mesh);
-      }
-      morphology.processCurves.slice(0, 6).forEach((curve) => {
-        const sample = curve.getPoints(5);
-        const mesh = new THREE.Mesh(
-          new THREE.TubeGeometry(new THREE.CatmullRomCurve3(sample), 18, 0.008, 5, false),
-          material,
+      const filamentCount = model.components.filaments + ((profile.family === "neuron" || profile.family === "msNeuron") ? 10 : 0);
+      for (let index = 0; index < filamentCount; index += 1) {
+        const curve = new THREE.CatmullRomCurve3(
+          Array.from({ length: 5 }, (_, step) => {
+            const t = step / 4;
+            return morphology.somaCenter.clone().add(
+              new THREE.Vector3(
+                Math.sin((t + index * 0.17) * Math.PI * 2) * (0.5 + Math.random() * morphology.somaRadius),
+                (t - 0.5) * morphology.somaRadius * 1.4 + (Math.random() - 0.5) * 0.18,
+                Math.cos((t + index * 0.11) * Math.PI * 2) * (0.5 + Math.random() * morphology.somaRadius),
+              ),
+            );
+          }),
         );
-        cytoskeletonGroup.add(mesh);
-        created.push(mesh);
-      });
+        addCurveTubes(cytoskeletonGroup, [curve], material, 0.013, 24, 6);
+      }
     }
 
-    this.setObjectLayer(
-      cytoskeletonGroup,
-      this.buildAnnotation({
-        category: "Structural scaffold",
-        title: "Cytoskeletal framework",
-        description:
-          "The scaffold stays inside the cell body and along real processes, rather than floating free outside the membrane.",
-        tags: ["cytoskeleton", "transport", "structure"],
-      }),
-      created,
-    );
     this.registerExplodable(cytoskeletonGroup, new THREE.Vector3(0, -1, 0.4));
     return cytoskeletonGroup;
   }
 
   createRibosomes(model, morphology) {
     const ribosomeGroup = this.createGroup("ribosomes");
-    const geometry = new THREE.SphereGeometry(0.016, 7, 7);
+    const geometry = new THREE.SphereGeometry(0.018, 8, 8);
     const material = new THREE.MeshBasicMaterial({
       color: model.palette.ribosome || COLOR_MAP.ribosome,
       transparent: true,
-      opacity: 0.84,
+      opacity: 0.88,
     });
     const instanced = new THREE.InstancedMesh(geometry, material, model.components.ribosomes);
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3(1, 1, 1);
+
     for (let index = 0; index < model.components.ribosomes; index += 1) {
-      const position = this.sampleInsideEllipsoid(morphology.somaCenter, morphology.somaRadii, 0.14);
+      const position = organellePoint(morphology, { family: "generic" }, 4400 + index * 13, 0.9);
       matrix.compose(position, quaternion, scale);
       instanced.setMatrixAt(index, matrix);
     }
+
     ribosomeGroup.add(instanced);
-    this.setObjectLayer(
-      ribosomeGroup,
-      this.buildAnnotation({
-        category: "Translation machinery",
-        title: "Ribosomal field",
-        description:
-          "Ribosomes are distributed through the cytoplasm and rough ER-rich zones but remain inside the cell body in this visualization.",
-        tags: ["ribosome", "translation", "protein synthesis"],
-      }),
-      [instanced],
-    );
     this.registerExplodable(ribosomeGroup, new THREE.Vector3(0.2, 0.2, -1));
     return ribosomeGroup;
   }
@@ -1382,7 +1807,7 @@ export class CellScene {
   }
 
   applyExplode() {
-    const distance = this.explodeAmount * 1.5;
+    const distance = this.explodeAmount * 1.65;
     this.explodable.forEach((item) => {
       item.mesh.position.copy(item.origin).add(item.direction.clone().multiplyScalar(distance));
     });
@@ -1411,20 +1836,23 @@ export class CellScene {
       }
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       materials.forEach((material) => {
-        if (!("opacity" in material)) {
-          return;
-        }
-        if (material.userData.baseOpacity == null) {
-          material.userData.baseOpacity = material.opacity;
-        }
         material.wireframe = this.showWireframe;
-        if (this.showXRay) {
-          material.transparent = true;
-          material.opacity = Math.min(material.userData.baseOpacity, 0.26);
-          material.depthWrite = false;
-        } else {
-          material.opacity = material.userData.baseOpacity;
-          material.depthWrite = true;
+        if ("opacity" in material) {
+          if (this.showXRay) {
+            material.transparent = true;
+            material.opacity = Math.min(material.opacity ?? 1, 0.28);
+            material.depthWrite = false;
+          } else {
+            material.depthWrite = true;
+            if (material.type === "MeshBasicMaterial") {
+              material.opacity = Math.max(material.opacity ?? 1, 0.44);
+            } else {
+              material.opacity = material.userData.baseOpacity || material.opacity || 0.95;
+            }
+          }
+        }
+        if (!material.userData.baseOpacity) {
+          material.userData.baseOpacity = material.opacity;
         }
       });
     });
@@ -1448,78 +1876,17 @@ export class CellScene {
     this.controls.target.copy(nucleus.position);
   }
 
+  resetFocus() {
+    this.controls.target.set(0, 0, 0);
+  }
+
   resetView() {
-    const isExtended = this.activeProfile && ["neuron", "glia", "muscle", "melanocyte"].includes(this.activeProfile.family);
-    const extendedZ = Math.max(12.5, this.currentOuterRadius * 1.2);
-    this.camera.position.copy(isExtended ? new THREE.Vector3(0.8, 1.4, extendedZ) : this.defaultCamera.clone());
+    const isExtended = this.activeProfile && ["neuron", "msNeuron", "muscle", "melanocyte"].includes(this.activeProfile.family);
+    this.camera.position.copy(
+      isExtended ? new THREE.Vector3(0.8, 1.4, 12.5) : this.defaultCamera.clone(),
+    );
     this.controls.target.set(0, 0, 0);
     this.controls.update();
-  }
-
-  handlePointerDown(event) {
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const intersections = this.raycaster.intersectObjects(this.cellGroup.children, true);
-    const hit = intersections.find((item) => this.findAnnotatedObject(item.object));
-    if (!hit) {
-      this.clearSelection();
-      return;
-    }
-    const annotated = this.findAnnotatedObject(hit.object);
-    this.selectObject(annotated);
-  }
-
-  findAnnotatedObject(object) {
-    let current = object;
-    while (current) {
-      if (current.userData && current.userData.annotation) {
-        return current;
-      }
-      current = current.parent;
-    }
-    return null;
-  }
-
-  selectObject(object) {
-    this.clearSelection(false);
-    this.selection = object;
-    const material = object.material || object.children.find((child) => child.material)?.material;
-    if (material && !Array.isArray(material) && material.emissive) {
-      this.highlightedMaterial = material;
-      this.highlightedPreviousEmissive = material.emissive.clone();
-      material.emissive = material.emissive.clone().lerp(new THREE.Color("#ffffff"), 0.35);
-    }
-    this.onSelectionChange(object.userData.annotation);
-  }
-
-  clearSelection(emit = true) {
-    if (this.highlightedMaterial && this.highlightedPreviousEmissive) {
-      this.highlightedMaterial.emissive.copy(this.highlightedPreviousEmissive);
-    }
-    this.highlightedMaterial = null;
-    this.highlightedPreviousEmissive = null;
-    this.selection = null;
-    if (emit) {
-      this.onSelectionChange(null);
-    }
-  }
-
-  animateSignals(elapsed) {
-    this.motionPaths.forEach((path) => {
-      if (path.mode === "orbit") {
-        const angle = (elapsed * path.speed + path.offset * Math.PI * 2) % (Math.PI * 2);
-        path.mesh.position.set(
-          path.anchor.x + Math.cos(angle) * path.radius,
-          path.anchor.y + Math.sin(angle * 1.3) * path.radius * 0.45,
-          path.anchor.z + Math.sin(angle) * path.radius,
-        );
-        return;
-      }
-      const t = (elapsed * path.speed + path.offset) % 1;
-      path.mesh.position.copy(path.curve.getPointAt(t));
-    });
   }
 
   animate() {
@@ -1530,7 +1897,25 @@ export class CellScene {
       floater.mesh.rotation.x += 0.0008;
       floater.mesh.rotation.y += 0.001;
     });
-    this.animateSignals(elapsed);
+    this.signalPulses.forEach((pulse, index) => {
+      let t = (elapsed * pulse.speed * (1.0 + this.stateTension * 1.7) + pulse.phase) % 1;
+      if (t > pulse.damagedBand[0] && t < pulse.damagedBand[1]) {
+        t -= Math.sin((t - pulse.damagedBand[0]) * Math.PI * 8) * 0.006;
+        pulse.mesh.scale.setScalar(1.0 + Math.sin(elapsed * 9 + index) * 0.28);
+      } else {
+        pulse.mesh.scale.setScalar(0.82 + Math.sin(elapsed * 12 + index) * 0.08);
+      }
+      pulse.mesh.position.copy(pulse.curve.getPoint(clamp(t, 0, 1)));
+    });
+    this.reactiveMeshes.forEach((item) => {
+      const wave = 1 + Math.sin(elapsed * item.speed + item.phase) * item.amplitude;
+      item.mesh.scale.copy(item.baseScale).multiplyScalar(wave);
+      item.mesh.rotation.y += 0.003 + item.amplitude * 0.002;
+    });
+    if (this.selectionHalo) {
+      this.selectionHalo.rotation.y += 0.012;
+      this.selectionHalo.rotation.z += 0.007;
+    }
     this.root.rotation.y += 0.0009 + this.stateTension * 0.0008;
     this.root.rotation.z = Math.sin(elapsed * 0.12) * 0.04;
     this.stars.rotation.y -= 0.00025;
@@ -1551,6 +1936,7 @@ export class CellScene {
     cancelAnimationFrame(this.frame);
     window.removeEventListener("resize", this.handleResize);
     this.renderer.domElement.removeEventListener("pointerdown", this.handlePointerDown);
+    this.renderer.domElement.removeEventListener("pointermove", this.handlePointerMove);
     this.controls.dispose();
     this.renderer.dispose();
   }
